@@ -1222,6 +1222,172 @@ def query_explain():
     return jsonify({"answer": answer, "html": html})
 
 
+# ========== 定时爬取接口 ==========
+CRON_SECRET = os.environ.get("CRON_SECRET", "shizheng2026")
+
+@app.route("/api/cron/daily-crawl", methods=["POST", "GET"])
+def cron_daily_crawl():
+    """定时爬取新闻，供外部cron服务调用"""
+    # 简单鉴权
+    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
+    if secret != CRON_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    from urllib.parse import urljoin
+    from bs4 import BeautifulSoup
+    import threading
+
+    def do_crawl():
+        today = datetime.now().strftime("%Y-%m-%d")
+        print(f"[CRON] 开始每日爬取 {today}")
+
+        # 1. 爬取新闻
+        headers_req = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+        }
+        sources = [
+            ("求是网", "http://www.qstheory.cn/"),
+            ("人民网", "http://politics.people.com.cn/"),
+            ("新华网", "http://www.xinhuanet.com/politics/"),
+        ]
+        all_news = {}
+        for name, base_url in sources:
+            try:
+                resp = requests.get(base_url, timeout=15, headers=headers_req, verify=False)
+                if resp.status_code == 200:
+                    resp.encoding = 'utf-8'
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    count = 0
+                    for a in soup.find_all('a', href=True):
+                        text = a.get_text(strip=True)
+                        href = a['href']
+                        if 15 < len(text) < 100 and re.search(r'[一-鿿]', text):
+                            exclude = ['登录', '注册', '搜索', '首页', '上一页', '下一页', '评论']
+                            if not any(kw in text for kw in exclude):
+                                if href.startswith('//'):
+                                    href = 'http:' + href
+                                elif href.startswith('/'):
+                                    href = urljoin(base_url, href)
+                                elif not href.startswith('http'):
+                                    href = urljoin(base_url, href)
+                                if text not in all_news and count < 15:
+                                    all_news[text] = {"source": name, "url": href}
+                                    count += 1
+                print(f"[CRON] {name}: {count} 条")
+            except Exception as e:
+                print(f"[CRON] {name} 失败: {e}")
+
+        if not all_news:
+            print("[CRON] 未获取到新闻")
+            return
+
+        # 排序
+        priority = {"求是网": 1, "人民网": 2, "新华网": 3}
+        sorted_news = sorted(all_news.items(), key=lambda x: priority.get(x[1]["source"], 99))[:15]
+
+        # 2. 保存新闻全文（AI分析）
+        saved_files = []
+        for i, (title, info) in enumerate(sorted_news[:8]):
+            safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:40]
+            filename = f"{today}_{i+1:02d}_{safe_title}.md"
+            filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
+            if os.path.exists(filepath):
+                continue
+            # AI生成分析
+            prompt = f"请根据以下新闻标题，生成一份完整的时政新闻扩展分析（300-500字）：\n\n新闻标题：{title}\n\n请按以下格式输出：\n\n## 📌 新闻背景\n[2-3句背景介绍]\n\n## 📖 核心内容\n[新闻的具体内容扩展]\n\n## 🎯 考公考点\n- 申论角度：[可用主题]\n- 行测考点：[可能出题方向]\n\n## 💡 规范表述\n[2-3句官方标准表述]"
+            analysis = call_deepseek(prompt, "你是公考时政分析专家")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n")
+                f.write(f"**日期**：{today}\n")
+                f.write(f"**来源**：{info['source']}\n")
+                if info['url']:
+                    f.write(f"**原文链接**：{info['url']}\n")
+                f.write("\n---\n\n")
+                f.write(analysis)
+            saved_files.append(filepath)
+            print(f"[CRON] 已保存: {filename}")
+
+        # 3. 生成日报
+        formatted = "\n".join([f"{i+1}. 【{info['source']}】{title}" for i, (title, info) in enumerate(sorted_news)])
+        report_prompt = f"""请分析以下时政新闻，按指定格式输出。
+
+【今日新闻】
+{formatted}
+
+请按以下格式输出：
+
+📌 **今日时政核心要点**（3-5条）
+- [新闻事件]：一句话概括+考公切入点
+
+📝 **一句话考点总结**
+1. 【来源】标题 → 考点方向：[具体考点]
+
+🔑 **高频关键词**
+关键词1 · 关键词2 · 关键词3
+
+📖 **申论素材卡**
+- 可用主题：[主题]
+- 核心案例：[新闻事件]
+- 规范表述：「官方表述」
+
+🎯 **行测时政预测**
+- 可能出题方向：[方向]
+
+💪 **【今日随堂测验】**
+
+请生成2道与今日时政相关的单选题：
+
+**题目1**
+[问题]
+A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
+答案：[_]
+
+**题目2**
+[问题]
+A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
+答案：[_]
+"""
+        report = call_deepseek(report_prompt, "你是一个公考时政分析专家。请严格按照要求的格式输出分析结果。")
+        report_path = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{today}.md")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(f"# 📰 {today} 时政日报\n\n")
+            f.write(report)
+        print(f"[CRON] 日报已生成: {report_path}")
+
+        # 4. 嵌入知识库
+        if saved_files:
+            try:
+                client = get_chroma_client()
+                collection = client.get_or_create_collection(
+                    name="shizheng_news",
+                    metadata={"description": "考公时政新闻知识库"}
+                )
+                for filepath in saved_files:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    chunks = chunk_text(content)
+                    if not chunks:
+                        continue
+                    embeddings = get_embeddings(chunks)
+                    if not embeddings:
+                        continue
+                    fname = os.path.basename(filepath).replace(".md", "")
+                    ids = [f"{fname}_chunk_{j}" for j in range(len(chunks))]
+                    collection.add(documents=chunks, embeddings=embeddings, ids=ids)
+                print(f"[CRON] 知识库已更新，新增{len(saved_files)}篇")
+            except Exception as e:
+                print(f"[CRON] 知识库嵌入失败: {e}")
+
+        print(f"[CRON] 每日爬取完成")
+
+    # 异步执行，避免超时
+    thread = threading.Thread(target=do_crawl)
+    thread.start()
+    return jsonify({"message": "爬取任务已启动", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
 # ========== 启动 ==========
 if __name__ == "__main__":
     print("=" * 50)
