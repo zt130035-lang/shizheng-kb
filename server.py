@@ -1499,12 +1499,25 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
                     chunks = chunk_text(content)
                     if not chunks:
                         continue
-                    embeddings = get_embedding(chunks)
-                    if not embeddings:
-                        continue
                     fname = os.path.basename(filepath).replace(".md", "")
-                    ids = [f"{fname}_chunk_{j}" for j in range(len(chunks))]
-                    collection.add(documents=chunks, embeddings=embeddings, ids=ids)
+                    date_match = re.match(r'(\d{4}-\d{2}-\d{2})', fname)
+                    for j, chunk in enumerate(chunks):
+                        try:
+                            emb = get_embedding([chunk])
+                            if emb:
+                                meta = {
+                                    "title": fname,
+                                    "date": date_match.group(1) if date_match else today,
+                                    "source": "新闻归档"
+                                }
+                                collection.add(
+                                    documents=[chunk],
+                                    embeddings=emb,
+                                    ids=[f"{fname}_chunk_{j}"],
+                                    metadatas=[meta]
+                                )
+                        except Exception as e:
+                            print(f"[CRON] 嵌入chunk失败: {e}")
                 print(f"[CRON] 知识库已更新，新增{len(saved_files)}篇")
             except Exception as e:
                 print(f"[CRON] 知识库嵌入失败: {e}")
@@ -1531,6 +1544,90 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
     thread = threading.Thread(target=do_crawl)
     thread.start()
     return jsonify({"message": "爬取任务已启动", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+
+
+@app.route("/api/rebuild-kb", methods=["POST", "GET"])
+def rebuild_knowledge_base():
+    """重建知识库：将所有已有新闻归档重新嵌入向量库"""
+    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
+    if secret != CRON_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    files = glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md"))
+    if not files:
+        return jsonify({"error": "无新闻归档文件", "dir": NEWS_ARCHIVE_DIR}), 404
+
+    errors = []
+    success_count = 0
+    try:
+        client = get_chroma_client()
+        # 删除旧的再重建
+        try:
+            client.delete_collection("shizheng_news")
+        except Exception:
+            pass
+        collection = client.get_or_create_collection(
+            name="shizheng_news",
+            metadata={"description": "考公时政新闻知识库"}
+        )
+
+        for filepath in sorted(files):
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if not content.strip():
+                    continue
+                chunks = chunk_text(content)
+                if not chunks:
+                    continue
+                # 逐条嵌入，避免批量过大
+                fname = os.path.basename(filepath).replace(".md", "")
+                for j, chunk in enumerate(chunks):
+                    try:
+                        emb = get_embedding([chunk])
+                        if emb:
+                            # 提取元数据
+                            date_match = re.match(r'(\d{4}-\d{2}-\d{2})', fname)
+                            meta = {
+                                "title": fname,
+                                "date": date_match.group(1) if date_match else "",
+                                "source": "新闻归档"
+                            }
+                            collection.add(
+                                documents=[chunk],
+                                embeddings=emb,
+                                ids=[f"{fname}_chunk_{j}"],
+                                metadatas=[meta]
+                            )
+                    except Exception as e:
+                        errors.append(f"{fname}_chunk_{j}: {str(e)[:100]}")
+                success_count += 1
+            except Exception as e:
+                errors.append(f"{os.path.basename(filepath)}: {str(e)[:100]}")
+
+        total = collection.count()
+        return jsonify({
+            "success": True,
+            "files_processed": success_count,
+            "total_chunks": total,
+            "errors": errors[:10]
+        })
+    except Exception as e:
+        return jsonify({"error": f"知识库重建失败: {str(e)}", "details": errors[:10]}), 500
+
+
+@app.route("/api/debug/embedding-test")
+def debug_embedding():
+    """测试嵌入API是否正常"""
+    test_text = "习近平总书记关于全面依法治国的重要论述"
+    try:
+        result = get_embedding([test_text])
+        if result:
+            return jsonify({"success": True, "dim": len(result[0]), "first_5": result[0][:5]})
+        else:
+            return jsonify({"success": False, "error": "返回空结果"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ========== 启动 ==========
