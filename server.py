@@ -1380,6 +1380,22 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
             except Exception as e:
                 print(f"[CRON] 知识库嵌入失败: {e}")
 
+        # 5. Bark推送到手机
+        bark_key = os.environ.get("BARK_DEVICE_KEY", "CvCwzTHBHUNpm8znAvxsSB")
+        if bark_key:
+            try:
+                bark_url = f"https://api.day.app/{bark_key}"
+                bark_body = report[:3500] if len(report) > 3500 else report
+                bark_payload = {
+                    "title": f"📰 时政日报 {today}",
+                    "body": bark_body,
+                    "group": "时政日报",
+                }
+                requests.post(bark_url, json=bark_payload, timeout=10)
+                print(f"[CRON] Bark推送成功")
+            except Exception as e:
+                print(f"[CRON] Bark推送失败: {e}")
+
         print(f"[CRON] 每日爬取完成")
 
     # 异步执行，避免超时
