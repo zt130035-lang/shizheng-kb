@@ -16,11 +16,27 @@ fullWidth: true
 
 | 模块 | 说明 |
 |------|------|
-| 新闻归档 | 按日期浏览爬取的时政新闻全文 |
-| 每日日报 | 查看 AI 生成的考点日报和周报 |
-| 知识查询 | 输入问题，语义搜索向量知识库 |
-| PDF做题 | 导入PDF → 提取/AI出题 → 答题 → AI解析 |
-| 知识库管理 | 创建/删除知识库，上传文本入库 |
+| 📰 新闻归档 | 按日期浏览爬取的时政新闻全文，AI生成考点分析 |
+| 📅 每日日报 | 查看 AI 生成的考点日报，含随堂测验 |
+| 🔍 知识查询 | 输入问题，语义搜索向量知识库（BGE-M3 嵌入） |
+| 📝 PDF做题 | 导入PDF → 提取/AI出题 → 答题 → AI解析 |
+| ⭐ 收藏夹 | 收藏重要新闻，方便复习回顾 |
+| ❌ 错题本 | 自动记录错题，针对性复习 |
+| 📊 学习统计 | 追踪学习进度，数据驱动备考 |
+| ⚙️ 知识库管理 | 创建/删除知识库，上传文本入库 |
+
+## 技术栈
+
+- **后端**：Flask + Gunicorn
+- **AI**：DeepSeek（分析/出题） + SiliconFlow BGE-M3（向量嵌入）
+- **向量库**：ChromaDB
+- **爬虫**：BeautifulSoup4（求是网、人民网、新华网）
+- **PDF解析**：PyMuPDF
+- **部署**：Docker on Render.com（免费版）
+- **定时任务**：cron-job.org（每日9:00自动爬取）
+- **保活**：UptimeRobot（5分钟心跳）
+- **推送**：Bark（爬取完成推送到手机）
+- **数据持久化**：爬取后自动通过 GitHub API 同步回仓库
 
 ## 本地运行
 
@@ -31,6 +47,51 @@ python server.py
 
 浏览器打开 http://localhost:5678
 
-## 云端部署
+## 云端部署（Render.com）
 
-本项目支持 Hugging Face Spaces (Docker) 部署，详见 DEPLOY.md。
+### 环境变量
+
+| 变量 | 说明 | 必填 |
+|------|------|------|
+| `DEEPSEEK_API_KEY` | DeepSeek API 密钥 | ✅ |
+| `SILICONFLOW_API_KEY` | SiliconFlow 嵌入 API 密钥 | ✅ |
+| `GITHUB_TOKEN` | GitHub Personal Access Token（数据自动同步） | ✅ |
+| `GITHUB_REPO` | GitHub 仓库（默认 zt130035-lang/shizheng-kb） | ❌ |
+| `BARK_DEVICE_KEY` | Bark 推送设备 Key | ❌ |
+| `CRON_SECRET` | 定时爬取鉴权密钥（默认 shizheng2026） | ❌ |
+| `DATA_DIR` | 数据目录（默认 /data） | ❌ |
+| `PORT` | 端口（默认 7860） | ❌ |
+
+### 数据持久化机制
+
+Render 免费版无持久磁盘，每次重启文件系统重置。本项目通过以下机制保证数据不丢失：
+
+```
+爬取/提取 → 保存到 /data → GitHub API 自动 push 到仓库
+                                      ↓
+下次部署 → Dockerfile COPY data/ → 数据从仓库恢复到 /data
+                                      ↓
+                          /api/rebuild-kb 重建向量索引
+```
+
+### API 端点
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/cron/daily-crawl?secret=xxx` | 触发每日爬取（cron-job.org 调用） |
+| `GET /api/rebuild-kb?secret=xxx` | 重建向量知识库 |
+| `GET /api/sync-github?secret=xxx` | 手动触发数据同步到 GitHub |
+| `GET /api/debug/embedding-test` | 测试嵌入 API 是否正常 |
+
+### 部署步骤
+
+1. Fork 或 push 代码到 GitHub
+2. Render.com 创建 Web Service → 连接 GitHub 仓库
+3. 配置环境变量（见上表）
+4. 部署完成后访问 `/api/rebuild-kb?secret=shizheng2026` 初始化知识库
+5. cron-job.org 设置每日定时请求 `/api/cron/daily-crawl?secret=shizheng2026`
+6. UptimeRobot 设置 5 分钟心跳保活
+
+## 移动端适配
+
+支持手机浏览器访问，侧边栏自动收起为汉堡菜单。
