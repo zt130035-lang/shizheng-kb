@@ -161,27 +161,156 @@ def index():
 # --- 手动爬取新闻 ---
 @app.route("/api/crawl", methods=["POST"])
 def crawl_news():
-    """手动触发一次新闻爬取"""
-    import subprocess
-    script_path = os.path.join(BASE_DIR, "..", "daily_news.py")
-    script_path = os.path.abspath(script_path)
+    """手动触发一次新闻爬取（内置逻辑，无需外部脚本）"""
+    from urllib.parse import urljoin
+    from bs4 import BeautifulSoup
+    import threading
 
-    if not os.path.exists(script_path):
-        return jsonify({"error": f"爬取脚本不存在: {script_path}"}), 404
+    def do_manual_crawl():
+        today = datetime.now().strftime("%Y-%m-%d")
+        print(f"[CRAWL] 开始手动爬取 {today}")
 
-    try:
-        result = subprocess.run(
-            ["python", script_path],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=180, cwd=os.path.dirname(script_path)
-        )
-        output = (result.stdout or "") + (result.stderr or "")
-        success = result.returncode == 0
-        return jsonify({"success": success, "output": output[-2000:]})
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "爬取超时（3分钟），请稍后重试"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        headers_req = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'zh-CN,zh;q=0.9',
+        }
+        sources = [
+            ("求是网", "http://www.qstheory.cn/"),
+            ("人民网", "http://politics.people.com.cn/"),
+            ("新华网", "http://www.xinhuanet.com/politics/"),
+        ]
+        all_news = {}
+        for name, base_url in sources:
+            try:
+                resp = requests.get(base_url, timeout=15, headers=headers_req, verify=False)
+                if resp.status_code == 200:
+                    resp.encoding = 'utf-8'
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    count = 0
+                    for a in soup.find_all('a', href=True):
+                        text = a.get_text(strip=True)
+                        href = a['href']
+                        if 15 < len(text) < 100 and re.search(r'[一-鿿]', text):
+                            exclude = ['登录', '注册', '搜索', '首页', '上一页', '下一页', '评论']
+                            if not any(kw in text for kw in exclude):
+                                if href.startswith('//'):
+                                    href = 'http:' + href
+                                elif href.startswith('/'):
+                                    href = urljoin(base_url, href)
+                                elif not href.startswith('http'):
+                                    href = urljoin(base_url, href)
+                                if text not in all_news and count < 15:
+                                    all_news[text] = {"source": name, "url": href}
+                                    count += 1
+                print(f"[CRAWL] {name}: {count} 条")
+            except Exception as e:
+                print(f"[CRAWL] {name} 失败: {e}")
+
+        if not all_news:
+            print("[CRAWL] 未获取到新闻")
+            return
+
+        priority = {"求是网": 1, "人民网": 2, "新华网": 3}
+        sorted_news = sorted(all_news.items(), key=lambda x: priority.get(x[1]["source"], 99))[:15]
+
+        # 保存新闻（AI分析）
+        saved_files = []
+        for i, (title, info) in enumerate(sorted_news[:8]):
+            safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:40]
+            filename = f"{today}_{i+1:02d}_{safe_title}.md"
+            filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
+            if os.path.exists(filepath):
+                continue
+            prompt = f"请根据以下新闻标题，生成一份完整的时政新闻扩展分析（300-500字）：\n\n新闻标题：{title}\n\n请按以下格式输出：\n\n## 📌 新闻背景\n[2-3句背景介绍]\n\n## 📖 核心内容\n[新闻的具体内容扩展]\n\n## 🎯 考公考点\n- 申论角度：[可用主题]\n- 行测考点：[可能出题方向]\n\n## 💡 规范表述\n[2-3句官方标准表述]"
+            analysis = call_deepseek(prompt, "你是公考时政分析专家")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# {title}\n\n")
+                f.write(f"**日期**：{today}\n")
+                f.write(f"**来源**：{info['source']}\n")
+                if info['url']:
+                    f.write(f"**原文链接**：{info['url']}\n")
+                f.write("\n---\n\n")
+                f.write(analysis)
+            saved_files.append(filepath)
+            print(f"[CRAWL] 已保存: {filename}")
+
+        # 生成日报
+        formatted = "\n".join([f"{i+1}. 【{info['source']}】{title}" for i, (title, info) in enumerate(sorted_news)])
+        report_prompt = f"""请分析以下时政新闻，按指定格式输出。
+
+【今日新闻】
+{formatted}
+
+请按以下格式输出：
+
+📌 **今日时政核心要点**（3-5条）
+- [新闻事件]：一句话概括+考公切入点
+
+📝 **一句话考点总结**
+1. 【来源】标题 → 考点方向：[具体考点]
+
+🔑 **高频关键词**
+关键词1 · 关键词2 · 关键词3
+
+📖 **申论素材卡**
+- 可用主题：[主题]
+- 核心案例：[新闻事件]
+- 规范表述：「官方表述」
+
+🎯 **行测时政预测**
+- 可能出题方向：[方向]
+
+💪 **【今日随堂测验】**
+
+请生成2道与今日时政相关的单选题：
+
+**题目1**
+[问题]
+A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
+答案：[_]
+
+**题目2**
+[问题]
+A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
+答案：[_]
+"""
+        report = call_deepseek(report_prompt, "你是一个公考时政分析专家。请严格按照要求的格式输出分析结果。")
+        report_path = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{today}.md")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(f"# 📰 {today} 时政日报\n\n")
+            f.write(report)
+        print(f"[CRAWL] 日报已生成: {report_path}")
+
+        # 嵌入知识库
+        if saved_files:
+            try:
+                client = get_chroma_client()
+                collection = client.get_or_create_collection(
+                    name="shizheng_news",
+                    metadata={"description": "考公时政新闻知识库"}
+                )
+                for filepath in saved_files:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    chunks = chunk_text(content)
+                    if not chunks:
+                        continue
+                    embeddings = get_embedding(chunks)
+                    if not embeddings:
+                        continue
+                    fname = os.path.basename(filepath).replace(".md", "")
+                    ids = [f"{fname}_chunk_{j}" for j in range(len(chunks))]
+                    collection.add(documents=chunks, embeddings=embeddings, ids=ids)
+                print(f"[CRAWL] 知识库已更新，新增{len(saved_files)}篇")
+            except Exception as e:
+                print(f"[CRAWL] 知识库嵌入失败: {e}")
+
+        print(f"[CRAWL] 手动爬取完成")
+
+    thread = threading.Thread(target=do_manual_crawl)
+    thread.start()
+    return jsonify({"success": True, "output": "爬取任务已启动，预计1-2分钟完成。刷新页面查看结果。"})
 
 
 # --- 新闻归档 ---
@@ -1370,7 +1499,7 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
                     chunks = chunk_text(content)
                     if not chunks:
                         continue
-                    embeddings = get_embeddings(chunks)
+                    embeddings = get_embedding(chunks)
                     if not embeddings:
                         continue
                     fname = os.path.basename(filepath).replace(".md", "")
