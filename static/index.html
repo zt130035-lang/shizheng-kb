@@ -1,0 +1,906 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>考公时政知识库</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #f0f2f5; --bg2: #e8edf3; --card: #ffffff; --text: #1d2939; --text2: #667085;
+  --primary: #3b82f6; --primary-dark: #2563eb; --primary-light: #eff6ff; --primary-bg: #dbeafe;
+  --border: #e5e7eb; --border2: #d1d5db;
+  --success: #059669; --success-bg: #d1fae5; --danger: #dc2626; --danger-bg: #fee2e2;
+  --warning: #d97706; --warning-bg: #fef3c7;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05); --shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+  --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.05);
+  --radius: 12px; --radius-sm: 8px; --radius-lg: 16px;
+  --transition: all 0.2s ease;
+}
+[data-theme="dark"] {
+  --bg: #0f172a; --bg2: #1e293b; --card: #1e293b; --text: #f1f5f9; --text2: #94a3b8;
+  --primary: #60a5fa; --primary-dark: #3b82f6; --primary-light: #1e3a5f; --primary-bg: #1e3a5f;
+  --border: #334155; --border2: #475569;
+  --success: #34d399; --success-bg: #064e3b; --danger: #f87171; --danger-bg: #450a0a;
+  --warning: #fbbf24; --warning-bg: #451a03;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2); --shadow: 0 4px 6px rgba(0,0,0,0.3);
+  --shadow-lg: 0 10px 15px rgba(0,0,0,0.4);
+}
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); display: flex; min-height: 100vh; line-height: 1.6; }
+
+/* ===== Sidebar ===== */
+.sidebar { width: 240px; background: var(--card); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; height: 100vh; z-index: 100; box-shadow: var(--shadow-sm); }
+.sidebar-header { padding: 24px 20px 20px; border-bottom: 1px solid var(--border); }
+.sidebar-header h1 { font-size: 15px; font-weight: 700; color: var(--primary); letter-spacing: -0.3px; }
+.sidebar-header .subtitle { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.sidebar nav { flex: 1; padding: 12px 8px; overflow-y: auto; }
+.sidebar nav a { display: flex; align-items: center; gap: 12px; padding: 10px 14px; color: var(--text2); text-decoration: none; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); margin-bottom: 2px; transition: var(--transition); }
+.sidebar nav a:hover { background: var(--primary-light); color: var(--primary); }
+.sidebar nav a.active { background: var(--primary-bg); color: var(--primary-dark); font-weight: 600; }
+.sidebar nav a .icon { font-size: 16px; width: 22px; text-align: center; flex-shrink: 0; }
+.sidebar-footer { padding: 12px 8px; border-top: 1px solid var(--border); }
+.theme-toggle { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer; font-size: 12px; color: var(--text2); border-radius: var(--radius-sm); transition: var(--transition); }
+.theme-toggle:hover { background: var(--primary-light); }
+
+/* ===== Main Content ===== */
+.main { margin-left: 240px; flex: 1; padding: 32px 40px; min-height: 100vh; }
+.page { display: none; animation: fadeIn 0.3s ease; } .page.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.page-header { margin-bottom: 24px; }
+.page-header h2 { font-size: 22px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 12px; }
+.page-header .desc { font-size: 13px; color: var(--text2); margin-top: 6px; }
+
+/* ===== Components ===== */
+.card { background: var(--card); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow-sm); border: 1px solid var(--border); transition: var(--transition); }
+.card:hover { box-shadow: var(--shadow); }
+.card h3 { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+.btn { padding: 8px 18px; background: var(--primary); color: #fff; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500; transition: var(--transition); display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: var(--shadow); }
+.btn:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-outline { background: transparent; color: var(--primary); border: 1.5px solid var(--primary); }
+.btn-outline:hover { background: var(--primary-light); transform: translateY(-1px); }
+.btn-danger { background: var(--danger); } .btn-danger:hover { background: #b91c1c; }
+.btn-success { background: var(--success); } .btn-success:hover { background: #047857; }
+.btn-warning { background: var(--warning); color: #fff; } .btn-warning:hover { background: #b45309; }
+.btn-ghost { background: transparent; color: var(--text2); padding: 6px 10px; } .btn-ghost:hover { background: var(--bg2); color: var(--text); transform: none; box-shadow: none; }
+
+.search-box { display: flex; gap: 10px; margin-bottom: 20px; }
+.search-box input, .search-box select { flex: 1; padding: 10px 16px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--card); color: var(--text); outline: none; transition: var(--transition); }
+.search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.3px; }
+.form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 14px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--bg); color: var(--text); outline: none; transition: var(--transition); }
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.form-group textarea { min-height: 100px; resize: vertical; font-family: inherit; }
+
+.loading { text-align: center; padding: 40px; color: var(--text2); font-size: 13px; }
+.loading::after { content: ""; display: inline-block; width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; margin-left: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.tag { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 500; background: var(--primary-light); color: var(--primary); }
+.tag-success { background: var(--success-bg); color: var(--success); }
+.tag-danger { background: var(--danger-bg); color: var(--danger); }
+.tag-warning { background: var(--warning-bg); color: var(--warning); }
+
+/* ===== News Archive ===== */
+.date-group { margin-bottom: 24px; }
+.date-group .date-header { font-size: 13px; color: var(--text2); margin-bottom: 8px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.news-item { padding: 10px 16px; border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition); font-size: 13px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+.news-item:last-child { border-bottom: none; }
+.news-item:hover { background: var(--primary-light); }
+.news-item .idx { color: var(--primary); font-weight: 700; min-width: 24px; font-size: 12px; }
+.news-item .title { flex: 1; }
+.news-item .star { color: var(--warning); font-size: 14px; }
+
+/* Split view for news detail */
+.split-view { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.split-view .panel { background: var(--card); border-radius: var(--radius); padding: 24px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); max-height: 75vh; overflow-y: auto; }
+.split-view .panel-header { font-size: 13px; font-weight: 700; color: var(--primary); margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid var(--primary-bg); display: flex; align-items: center; gap: 8px; }
+.content-display { line-height: 1.9; font-size: 14px; }
+.content-display h1 { font-size: 18px; margin: 16px 0 10px; font-weight: 700; }
+.content-display h2 { font-size: 15px; margin: 14px 0 8px; color: var(--primary); font-weight: 600; }
+.content-display p { margin: 8px 0; }
+.content-display ul, .content-display ol { padding-left: 20px; margin: 8px 0; }
+.content-display li { margin: 4px 0; }
+.content-display strong { color: var(--primary-dark); }
+.content-display a { color: var(--primary); text-decoration: underline; word-break: break-all; }
+.content-display a:hover { color: var(--primary-dark); }
+.content-display hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+/* ===== Calendar ===== */
+.calendar { background: var(--card); border-radius: var(--radius); padding: 24px; border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
+.calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.calendar-header h3 { font-size: 16px; font-weight: 700; }
+.calendar-nav { display: flex; gap: 8px; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+.calendar-grid .weekday { font-size: 11px; font-weight: 600; color: var(--text2); padding: 8px 0; text-transform: uppercase; }
+.calendar-grid .day { padding: 10px 4px; border-radius: var(--radius-sm); font-size: 13px; cursor: default; position: relative; transition: var(--transition); }
+.calendar-grid .day.other-month { color: var(--border2); }
+.calendar-grid .day.today { background: var(--primary-light); color: var(--primary); font-weight: 700; }
+.calendar-grid .day.has-report { cursor: pointer; font-weight: 600; }
+.calendar-grid .day.has-report::after { content: ""; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+.calendar-grid .day.has-report:hover { background: var(--primary-bg); color: var(--primary-dark); }
+.calendar-grid .day.has-weekly::after { background: var(--warning); }
+
+/* ===== Quiz ===== */
+.quiz-option { display: block; padding: 12px 16px; margin: 6px 0; border: 2px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: var(--transition); font-size: 13px; line-height: 1.5; }
+.quiz-option:hover { border-color: var(--primary); background: var(--primary-light); transform: translateX(4px); }
+.quiz-option.selected { border-color: var(--primary); background: var(--primary-bg); }
+.quiz-option.correct { border-color: var(--success); background: var(--success-bg); color: var(--success); }
+.quiz-option.wrong { border-color: var(--danger); background: var(--danger-bg); color: var(--danger); }
+.quiz-option.show-correct { border-color: var(--success); background: var(--success-bg); }
+.quiz-result { margin-top: 12px; padding: 14px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; }
+.quiz-result.correct-result { background: var(--success-bg); border: 1px solid var(--success); color: var(--success); }
+.quiz-result.wrong-result { background: var(--danger-bg); border: 1px solid var(--danger); color: var(--danger); }
+.quiz-analysis { margin-top: 14px; padding: 16px; background: var(--primary-light); border-radius: var(--radius-sm); line-height: 1.8; font-size: 13px; border: 1px solid var(--primary-bg); }
+
+/* ===== Query Cards ===== */
+.query-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.query-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; cursor: pointer; transition: var(--transition); position: relative; overflow: hidden; }
+.query-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--primary); border-radius: 4px 0 0 4px; }
+.query-card:hover { box-shadow: var(--shadow); transform: translateY(-2px); border-color: var(--primary); }
+.query-card .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.query-card .card-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.query-card .card-score { background: var(--primary); color: #fff; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.query-card .card-meta { font-size: 11px; color: var(--text2); margin-bottom: 6px; }
+.query-card .card-text { font-size: 12px; color: var(--text2); line-height: 1.5; }
+
+/* ===== Stats ===== */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat-card { padding: 20px; background: var(--card); border-radius: var(--radius); border: 1px solid var(--border); text-align: center; box-shadow: var(--shadow-sm); }
+.stat-card .num { font-size: 28px; font-weight: 800; color: var(--primary); line-height: 1.2; }
+.stat-card .label { font-size: 12px; color: var(--text2); margin-top: 6px; font-weight: 500; }
+.chart-bar { display: flex; align-items: flex-end; gap: 10px; height: 140px; padding: 12px 0; }
+.chart-bar .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.chart-bar .bar { width: 100%; max-width: 40px; border-radius: 6px 6px 0 0; min-height: 3px; transition: height 0.5s ease; }
+.chart-bar .bar-label { font-size: 10px; color: var(--text2); font-weight: 500; }
+.chart-bar .bar-val { font-size: 11px; color: var(--primary); font-weight: 700; }
+
+/* ===== Wrong Book ===== */
+.wrong-item { padding: 16px 20px; border-left: 4px solid var(--danger); margin-bottom: 12px; background: var(--card); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border: 1px solid var(--border); border-left: 4px solid var(--danger); box-shadow: var(--shadow-sm); }
+.wrong-item .q-text { font-size: 14px; font-weight: 600; margin-bottom: 8px; line-height: 1.5; }
+.wrong-item .q-meta { font-size: 11px; color: var(--text2); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ===== Timer ===== */
+.timer { font-size: 24px; font-weight: 800; color: var(--danger); text-align: center; padding: 12px; background: var(--danger-bg); border-radius: var(--radius-sm); margin-bottom: 12px; }
+
+/* ===== Progress ===== */
+.progress-bar { height: 6px; background: var(--border); border-radius: 3px; margin: 10px 0; overflow: hidden; }
+.progress-bar .fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); border-radius: 3px; transition: width 0.4s ease; }
+
+/* ===== Responsive ===== */
+@media (max-width: 1200px) { .split-view { grid-template-columns: 1fr; } }
+@media (max-width: 768px) {
+  .sidebar { width: 64px; } .sidebar-header h1, .sidebar nav a span, .sidebar-footer span, .sidebar-header .subtitle { display: none; }
+  .sidebar-header { padding: 16px 12px; } .sidebar nav a { justify-content: center; padding: 12px; }
+  .main { margin-left: 64px; padding: 20px 16px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .split-view { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+</head>
+<body>
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1>📚 考公时政知识库</h1>
+    <div class="subtitle">系统化学习 · 高效备考</div>
+  </div>
+  <nav>
+    <a href="#" data-page="archives" class="active"><span class="icon">📰</span><span>新闻归档</span></a>
+    <a href="#" data-page="favorites"><span class="icon">⭐</span><span>我的收藏</span></a>
+    <a href="#" data-page="reports"><span class="icon">📅</span><span>每日日报</span></a>
+    <a href="#" data-page="quiz"><span class="icon">✏️</span><span>PDF做题</span></a>
+    <a href="#" data-page="wrong"><span class="icon">📕</span><span>错题本</span></a>
+    <a href="#" data-page="query"><span class="icon">🔍</span><span>知识查询</span></a>
+    <a href="#" data-page="stats"><span class="icon">📊</span><span>学习统计</span></a>
+    <a href="#" data-page="manage"><span class="icon">⚙️</span><span>知识库管理</span></a>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="theme-toggle" onclick="toggleTheme()">🌓 <span>切换主题</span></div>
+  </div>
+</div>
+<div class="main">
+
+<!-- 新闻归档 -->
+<div class="page active" id="page-archives">
+  <div class="page-header">
+    <h2>📰 新闻归档 <button class="btn btn-sm" onclick="crawlNews()" id="crawl-btn">🔄 立即爬取</button></h2>
+    <div class="desc">每日时政新闻，左栏原文阅读，右栏考点解析</div>
+  </div>
+  <div id="crawl-status" style="display:none;margin-bottom:16px"></div>
+  <div class="search-box"><input type="text" id="archive-search" placeholder="搜索新闻标题..." oninput="filterArchives()"></div>
+  <div id="archives-list"></div>
+  <div id="archive-detail" style="display:none">
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+      <button class="btn btn-outline btn-sm" onclick="closeDetail()">← 返回列表</button>
+      <button class="btn btn-sm btn-warning" onclick="toggleFavorite()" id="fav-btn">⭐ 收藏</button>
+      <span id="archive-title-display" style="font-size:14px;font-weight:600;margin-left:8px"></span>
+    </div>
+    <div id="archive-content-single">
+      <div class="card">
+        <div class="content-display" id="archive-original"></div>
+        <div class="content-display" id="archive-analysis"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 我的收藏 -->
+<div class="page" id="page-favorites">
+  <div class="page-header">
+    <h2>⭐ 我的收藏</h2>
+    <div class="desc">收藏的重要新闻，方便复习回顾</div>
+  </div>
+  <div id="favorites-list"></div>
+  <div id="fav-detail" style="display:none">
+    <div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+      <button class="btn btn-outline btn-sm" onclick="closeFavDetail()">← 返回收藏</button>
+      <span id="fav-title-display" style="font-size:14px;font-weight:600;margin-left:8px"></span>
+    </div>
+    <div class="card">
+      <div class="content-display" id="fav-content"></div>
+      <div class="content-display" id="fav-analysis"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 每日日报 -->
+<div class="page" id="page-reports">
+  <div class="page-header">
+    <h2>📅 每日日报</h2>
+    <div class="desc">点击日历中的日期查看当天日报</div>
+  </div>
+  <div class="calendar" id="calendar-container">
+    <div class="calendar-header">
+      <button class="btn btn-ghost" onclick="changeMonth(-1)">◀</button>
+      <h3 id="calendar-title">2026年5月</h3>
+      <button class="btn btn-ghost" onclick="changeMonth(1)">▶</button>
+    </div>
+    <div class="calendar-grid" id="calendar-grid"></div>
+  </div>
+  <div id="report-detail" style="display:none;margin-top:20px">
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <button class="btn btn-outline btn-sm" onclick="closeReportDetail()">← 返回日历</button>
+      <span id="report-date-display" style="font-size:14px;font-weight:600;color:var(--primary)"></span>
+    </div>
+    <div class="card content-display" id="report-content"></div>
+  </div>
+</div>
+
+<!-- PDF做题 -->
+<div class="page" id="page-quiz">
+  <div class="page-header">
+    <h2>✏️ 刷题训练</h2>
+    <div class="desc">从PDF中提取完整题目，顺序/随机刷题，按需AI解析</div>
+  </div>
+  <div class="card" id="quiz-setup">
+    <h3 style="margin-bottom:12px">题目提取</h3>
+    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap">
+      <div class="form-group" style="margin-bottom:0;flex:1;min-width:200px"><label>PDF文件</label><select id="pdf-select" onchange="onPdfChange()"><option value="">加载中...</option></select></div>
+      <button class="btn" onclick="extractQuestions()" id="extract-btn">📥 提取题目</button>
+      <button class="btn btn-outline btn-sm" onclick="reextractQuestions()">🔄 重新提取</button>
+      <label class="btn btn-outline" style="cursor:pointer">📤 上传PDF <input type="file" accept=".pdf" style="display:none" onchange="uploadPDF(this)"></label>
+    </div>
+    <div id="extract-status" style="margin-top:10px;font-size:12px;color:var(--text2)"></div>
+  </div>
+  <div id="quiz-bank-info" style="display:none;margin-top:16px">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0">📚 题库</h3>
+        <span id="bank-progress" style="font-size:13px;color:var(--text2)"></span>
+      </div>
+      <div class="progress-bar" style="margin-bottom:14px"><div class="fill" id="bank-progress-fill" style="width:0%"></div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <button class="btn" onclick="startPractice('sequential')">📖 顺序刷题</button>
+        <div style="display:flex;gap:6px;align-items:end">
+          <div class="form-group" style="margin:0"><label style="font-size:11px">题数</label><input type="number" id="random-count" value="20" min="1" max="100" style="width:60px;padding:6px 8px;font-size:12px"></div>
+          <button class="btn btn-warning" onclick="startPractice('random')">🎲 随机</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:end">
+          <div class="form-group" style="margin:0"><label style="font-size:11px">题数</label><input type="number" id="exam-count" value="10" min="1" max="50" style="width:60px;padding:6px 8px;font-size:12px"></div>
+          <button class="btn btn-outline" onclick="startPractice('exam')">🎯 考试</button>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="togglePreview()">📋 预览题目</button>
+      </div>
+    </div>
+  </div>
+  <div id="quiz-preview-panel" style="display:none;margin-top:16px"></div>
+  <div id="daily-quiz-section" style="margin-top:20px"></div>
+</div>
+<!-- 刷题页面（沉浸式） -->
+<div class="page" id="page-quiz-practice">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <button class="btn btn-outline btn-sm" onclick="exitQuizPractice()">← 退出刷题</button>
+    <div id="quiz-progress-info" style="font-size:13px;color:var(--text2)"></div>
+  </div>
+  <div id="quiz-progress-bar" style="margin-bottom:16px"><div class="progress-bar"><div class="fill" id="quiz-progress-fill" style="width:0%"></div></div></div>
+  <div id="quiz-stats-bar" class="stats-grid" style="margin-bottom:16px"></div>
+  <div id="quiz-area"></div>
+</div>
+
+<!-- 错题本 -->
+<div class="page" id="page-wrong">
+  <div class="page-header">
+    <h2>📕 错题本</h2>
+    <div class="desc">做错的题目自动收录，可重做巩固</div>
+  </div>
+  <div id="wrong-list"></div>
+</div>
+
+<!-- 知识查询 -->
+<div class="page" id="page-query">
+  <div class="page-header">
+    <h2>🔍 知识库语义查询</h2>
+    <div class="desc">基于向量检索，智能匹配相关知识点</div>
+  </div>
+  <div class="search-box">
+    <input type="text" id="query-input" placeholder="输入问题，如：习近平近期外交活动、一带一路最新进展..." onkeydown="if(event.key==='Enter')doQuery()">
+    <button class="btn" onclick="doQuery()">🔍 搜索</button>
+  </div>
+  <div id="query-results"></div>
+</div>
+
+<!-- 学习统计 -->
+<div class="page" id="page-stats">
+  <div class="page-header">
+    <h2>📊 学习统计</h2>
+    <div class="desc">追踪学习进度，数据驱动备考</div>
+  </div>
+  <div id="stats-content"></div>
+</div>
+
+<!-- 知识库管理 -->
+<div class="page" id="page-manage">
+  <div class="page-header">
+    <h2>⚙️ 知识库管理</h2>
+    <div class="desc">管理向量知识库，上传文档扩充知识</div>
+  </div>
+  <div class="card">
+    <h3>创建新知识库</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-group"><label>名称</label><input type="text" id="new-kb-name" placeholder="如：法律常识库"></div>
+      <div class="form-group"><label>描述</label><input type="text" id="new-kb-desc" placeholder="可选描述"></div>
+    </div>
+    <button class="btn btn-sm" onclick="createCollection()">➕ 创建</button>
+  </div>
+  <div id="collections-list" style="margin-top:16px"></div>
+  <div id="upload-section" style="display:none;margin-top:16px">
+    <div class="card">
+      <h3 id="upload-title">上传内容到知识库</h3>
+      <div class="form-group"><label>标题</label><input type="text" id="upload-doc-title" placeholder="文档标题"></div>
+      <div class="form-group"><label>内容</label><textarea id="upload-doc-text" placeholder="粘贴文本内容..."></textarea></div>
+      <button class="btn" onclick="uploadToCollection()">📥 嵌入到知识库</button>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+// ===== Global State =====
+let archivesData = [], favoritesSet = new Set(), currentArchiveFile = '';
+let quizData = {questions:[], current:0, score:0, total:0, answered:[], userAnswers:{}, mode:'practice', examTimer:null, examTimeLeft:0, source:''};
+let calendarYear = 2026, calendarMonth = 5, reportsData = [];
+let lastQueryResults = [];
+
+// ===== Page Navigation =====
+document.querySelectorAll('.sidebar nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('.sidebar nav a').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + a.dataset.page).classList.add('active');
+    const loaders = {archives:loadArchives, favorites:loadFavorites, reports:loadReports, manage:loadCollections, quiz:loadPDFs, wrong:loadWrongBook, stats:loadStats};
+    if (loaders[a.dataset.page]) loaders[a.dataset.page]();
+  });
+});
+function toggleTheme() { const h=document.documentElement; h.dataset.theme=h.dataset.theme==='dark'?'':'dark'; localStorage.setItem('theme',h.dataset.theme); }
+if (localStorage.getItem('theme')) document.documentElement.dataset.theme=localStorage.getItem('theme');
+
+// ===== News Archive =====
+async function loadArchives() {
+  const el = document.getElementById('archives-list');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  const [archRes, favRes] = await Promise.all([fetch('/api/archives'), fetch('/api/favorites')]);
+  archivesData = await archRes.json();
+  const favs = await favRes.json();
+  favoritesSet = new Set(favs.map(f => f.filename));
+  renderArchives(archivesData);
+}
+function renderArchives(data) {
+  const el = document.getElementById('archives-list');
+  if (!data.length) { el.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--text2)">暂无新闻数据，点击"立即爬取"获取最新时政</div>'; return; }
+  el.innerHTML = data.map(g => `<div class="date-group"><div class="date-header">📅 ${g.date}（${g.count}篇）</div><div class="card" style="padding:8px 0">${g.items.map(item => `<div class="news-item" onclick="showArchive('${encodeURIComponent(item.filename)}')"><span class="idx">${item.index}</span><span class="title">${item.title}</span>${favoritesSet.has(item.filename)?'<span class="star">⭐</span>':''}</div>`).join('')}</div></div>`).join('');
+}
+function filterArchives() {
+  const kw = document.getElementById('archive-search').value.trim().toLowerCase();
+  if (!kw) { renderArchives(archivesData); return; }
+  const filtered = archivesData.map(g => ({...g, items: g.items.filter(i => i.title.toLowerCase().includes(kw))})).filter(g => g.items.length);
+  filtered.forEach(g => g.count = g.items.length);
+  renderArchives(filtered);
+}
+async function showArchive(filename) {
+  currentArchiveFile = decodeURIComponent(filename);
+  document.getElementById('archives-list').style.display = 'none';
+  document.getElementById('archive-search').parentElement.style.display = 'none';
+  document.getElementById('archive-detail').style.display = 'block';
+  document.getElementById('archive-original').innerHTML = '<div class="loading">加载中</div>';
+  document.getElementById('archive-analysis').innerHTML = '';
+  updateFavBtn();
+  const res = await fetch('/api/archives/' + filename);
+  const data = await res.json();
+  const title = currentArchiveFile.replace(/^\d{4}-\d{2}-\d{2}_\d+_/, '').replace('.md','');
+  document.getElementById('archive-title-display').textContent = title;
+  // 合并为一栏显示
+  document.getElementById('archive-original').innerHTML = data.original_html || data.html || '<p>内容为空</p>';
+  document.getElementById('archive-analysis').innerHTML = data.analysis_html ? `<hr style="margin:20px 0;border:none;border-top:2px solid var(--primary-bg)"><div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:12px">🎯 考点解析</div>${data.analysis_html}` : '';
+}
+function closeDetail() {
+  document.getElementById('archives-list').style.display = 'block';
+  document.getElementById('archive-search').parentElement.style.display = 'flex';
+  document.getElementById('archive-detail').style.display = 'none';
+}
+function updateFavBtn() {
+  const btn = document.getElementById('fav-btn');
+  btn.innerHTML = favoritesSet.has(currentArchiveFile) ? '💛 已收藏' : '⭐ 收藏';
+}
+async function toggleFavorite() {
+  if (favoritesSet.has(currentArchiveFile)) {
+    await fetch('/api/favorites/' + encodeURIComponent(currentArchiveFile), {method:'DELETE'});
+    favoritesSet.delete(currentArchiveFile);
+  } else {
+    const title = currentArchiveFile.replace(/^\d{4}-\d{2}-\d{2}_\d+_/, '').replace('.md','');
+    await fetch('/api/favorites', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename:currentArchiveFile, title, date:currentArchiveFile.slice(0,10)})});
+    favoritesSet.add(currentArchiveFile);
+  }
+  updateFavBtn();
+}
+async function crawlNews() {
+  const btn=document.getElementById('crawl-btn'), status=document.getElementById('crawl-status');
+  btn.disabled=true; btn.innerHTML='⏳ 爬取中...'; status.style.display='block';
+  status.innerHTML='<div class="card" style="font-size:12px;color:var(--text2);padding:14px">正在爬取最新时政新闻，预计1-2分钟...</div>';
+  try { const res=await fetch('/api/crawl',{method:'POST'}); const data=await res.json();
+    if(data.success){status.innerHTML='<div class="card" style="background:var(--success-bg);color:var(--success);font-size:12px;padding:14px">✅ 爬取完成！新闻已更新</div>';loadArchives();}
+    else{status.innerHTML=`<div class="card" style="background:var(--danger-bg);color:var(--danger);font-size:12px;padding:14px">❌ ${data.error||'部分失败'}</div>`;loadArchives();}
+  } catch(e){status.innerHTML=`<div class="card" style="background:var(--danger-bg);color:var(--danger);font-size:12px;padding:14px">❌ ${e.message}</div>`;}
+  btn.disabled=false; btn.innerHTML='🔄 立即爬取'; setTimeout(()=>{status.style.display='none';},5000);
+}
+// ===== Favorites =====
+async function loadFavorites() {
+  const el = document.getElementById('favorites-list');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  const data = await(await fetch('/api/favorites')).json();
+  if (!data.length) { el.innerHTML = '<div class="card" style="text-align:center;color:var(--text2);padding:50px"><div style="font-size:40px;margin-bottom:12px">⭐</div><p>暂无收藏，在新闻归档中点击收藏按钮添加</p></div>'; return; }
+  el.innerHTML = data.map(f => `<div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showFavArticle('${encodeURIComponent(f.filename)}')"><div><div style="font-weight:600;font-size:14px">${f.title}</div><div style="font-size:12px;color:var(--text2);margin-top:3px">📅 ${f.date} · 收藏于 ${f.time||''}</div></div><button class="btn btn-sm btn-danger" onclick="event.stopPropagation();removeFav('${encodeURIComponent(f.filename)}')">取消收藏</button></div>`).join('');
+}
+async function showFavArticle(filename) {
+  document.getElementById('favorites-list').style.display = 'none';
+  document.getElementById('fav-detail').style.display = 'block';
+  document.getElementById('fav-content').innerHTML = '<div class="loading">加载中</div>';
+  document.getElementById('fav-analysis').innerHTML = '';
+  const res = await fetch('/api/archives/' + filename);
+  const data = await res.json();
+  const title = decodeURIComponent(filename).replace(/^\d{4}-\d{2}-\d{2}_\d+_/, '').replace('.md','');
+  document.getElementById('fav-title-display').textContent = title;
+  document.getElementById('fav-content').innerHTML = data.original_html || data.html || '<p>内容为空</p>';
+  document.getElementById('fav-analysis').innerHTML = data.analysis_html ? `<hr style="margin:20px 0;border:none;border-top:2px solid var(--primary-bg)"><div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:12px">🎯 考点解析</div>${data.analysis_html}` : '';
+}
+function closeFavDetail() {
+  document.getElementById('favorites-list').style.display = 'block';
+  document.getElementById('fav-detail').style.display = 'none';
+}
+async function removeFav(filename) {
+  await fetch('/api/favorites/' + filename, {method:'DELETE'});
+  loadFavorites();
+}
+
+// ===== Calendar Reports =====
+async function loadReports() {
+  const data = await(await fetch('/api/reports')).json();
+  reportsData = data;
+  const now = new Date();
+  calendarYear = now.getFullYear();
+  calendarMonth = now.getMonth() + 1;
+  renderCalendar();
+}
+function changeMonth(delta) {
+  calendarMonth += delta;
+  if (calendarMonth > 12) { calendarMonth = 1; calendarYear++; }
+  if (calendarMonth < 1) { calendarMonth = 12; calendarYear--; }
+  renderCalendar();
+}
+function renderCalendar() {
+  document.getElementById('calendar-title').textContent = `${calendarYear}年${calendarMonth}月`;
+  const grid = document.getElementById('calendar-grid');
+  const weekdays = ['日','一','二','三','四','五','六'];
+  let html = weekdays.map(d => `<div class="weekday">${d}</div>`).join('');
+
+  const firstDay = new Date(calendarYear, calendarMonth - 1, 1).getDay();
+  const daysInMonth = new Date(calendarYear, calendarMonth, 0).getDate();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
+  // Report dates for this month
+  const reportDates = {};
+  reportsData.forEach(r => {
+    if (r.year === calendarYear && r.month === calendarMonth) {
+      reportDates[r.day] = r;
+    }
+  });
+
+  // Previous month padding
+  for (let i = 0; i < firstDay; i++) {
+    html += `<div class="day other-month"></div>`;
+  }
+  // Days
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${calendarYear}-${String(calendarMonth).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = dateStr === todayStr;
+    const report = reportDates[d];
+    let cls = 'day';
+    if (isToday) cls += ' today';
+    if (report) cls += report.type === '周报' ? ' has-report has-weekly' : ' has-report';
+    const onclick = report ? `onclick="showReport('${encodeURIComponent(report.filename)}','${report.date} ${report.type}')"` : '';
+    html += `<div class="${cls}" ${onclick}>${d}</div>`;
+  }
+  grid.innerHTML = html;
+}
+async function showReport(fn, label) {
+  document.getElementById('calendar-container').style.display = 'none';
+  document.getElementById('report-detail').style.display = 'block';
+  document.getElementById('report-date-display').textContent = label;
+  document.getElementById('report-content').innerHTML = '<div class="loading">加载中</div>';
+  const d = await(await fetch('/api/reports/' + fn)).json();
+  document.getElementById('report-content').innerHTML = d.html || '内容为空';
+}
+function closeReportDetail() {
+  document.getElementById('calendar-container').style.display = 'block';
+  document.getElementById('report-detail').style.display = 'none';
+}
+
+// ===== Knowledge Query (Card Style) =====
+async function doQuery() {
+  const q = document.getElementById('query-input').value.trim();
+  if (!q) return;
+  const el = document.getElementById('query-results');
+  el.innerHTML = '<div class="loading">搜索中</div>';
+  const data = await(await fetch('/api/query', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:q, top_k:6})})).json();
+  if (data.error) { el.innerHTML = `<p style="color:var(--danger)">${data.error}</p>`; return; }
+  lastQueryResults = data.results;
+  el.innerHTML = `<div class="query-cards">${data.results.map((r, i) => `<div class="query-card" onclick="expandCard(${i})"><div class="card-header"><span class="card-title">${r.title || '未知来源'}</span><span class="card-score">${(r.score*100).toFixed(1)}%</span></div><div class="card-meta">${r.date || ''} · ${r.source || '知识库'}</div><div class="card-text">${r.content.substring(0, 80)}...</div></div>`).join('')}</div><div id="card-detail" style="display:none;margin-top:16px"></div><button class="btn" style="margin-top:16px" onclick="explainQuery()">🤖 AI 深度解读</button><div id="explain-result"></div>`;
+}
+function expandCard(idx) {
+  const r = lastQueryResults[idx];
+  const el = document.getElementById('card-detail');
+  el.style.display = 'block';
+  el.innerHTML = `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><strong style="font-size:14px">${r.title || '未知来源'}</strong><span style="font-size:12px;color:var(--text2);margin-left:10px">${r.date || ''} · ${r.source || '知识库'}</span></div><button class="btn btn-sm btn-ghost" onclick="document.getElementById('card-detail').style.display='none'">✕ 关闭</button></div><div class="content-display" style="font-size:13px;line-height:1.9;white-space:pre-wrap">${r.content}</div></div>`;
+  el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+async function explainQuery() {
+  const el = document.getElementById('explain-result');
+  el.innerHTML = '<div class="loading">AI分析中</div>';
+  const q = document.getElementById('query-input').value.trim();
+  const context = lastQueryResults.map(r => r.content).join('\n\n');
+  const data = await(await fetch('/api/query/explain', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:q, context})})).json();
+  el.innerHTML = `<div class="card content-display" style="margin-top:16px">${data.html}</div>`;
+}
+
+// ===== PDF Quiz =====
+let currentQuestions = [];
+let quizProgress = JSON.parse(localStorage.getItem('quizProgress') || '{}');
+
+async function loadPDFs() {
+  const sel = document.getElementById('pdf-select');
+  const data = await(await fetch('/api/pdf/list')).json();
+  sel.innerHTML = data.length ? data.map(p => `<option value="${p.filename}">${p.filename} (${p.size_mb}MB)</option>`).join('') : '<option value="">暂无PDF，请上传</option>';
+  onPdfChange();
+  loadDailyQuiz();
+}
+async function onPdfChange() {
+  const filename = document.getElementById('pdf-select').value;
+  if (!filename) { document.getElementById('quiz-bank-info').style.display='none'; return; }
+  const data = await(await fetch('/api/pdf/questions?filename=' + encodeURIComponent(filename))).json();
+  currentQuestions = data.questions || [];
+  if (currentQuestions.length > 0) {
+    showBankInfo();
+  } else {
+    document.getElementById('quiz-bank-info').style.display = 'none';
+    document.getElementById('extract-status').textContent = '该PDF尚未提取题目，点击"提取题目"开始';
+  }
+}
+function showBankInfo() {
+  const filename = document.getElementById('pdf-select').value;
+  const progress = quizProgress[filename] || 0;
+  const total = currentQuestions.length;
+  const pct = total ? Math.round(progress / total * 100) : 0;
+  document.getElementById('quiz-bank-info').style.display = 'block';
+  document.getElementById('bank-progress').textContent = `共${total}题，已刷到第${progress}题（${pct}%）`;
+  document.getElementById('bank-progress-fill').style.width = pct + '%';
+  document.getElementById('extract-status').textContent = `✅ 已提取${total}道题目`;
+  document.getElementById('quiz-preview-panel').style.display = 'none';
+}
+async function extractQuestions() {
+  const filename = document.getElementById('pdf-select').value;
+  if (!filename) { alert('请选择PDF'); return; }
+  const btn = document.getElementById('extract-btn');
+  btn.disabled = true; btn.innerHTML = '⏳ 提取中...';
+  const res = await fetch('/api/pdf/extract-questions', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename})});
+  const data = await res.json();
+  btn.disabled = false; btn.innerHTML = '📥 提取题目';
+  if (data.error) { document.getElementById('extract-status').innerHTML = `<span style="color:var(--danger)">${data.error}</span>`; return; }
+  currentQuestions = data.questions;
+  const aiTag = data.ai_generated ? ' <span style="color:var(--warning);font-size:12px">🤖 AI生成</span>' : '';
+  document.getElementById('extract-status').innerHTML = data.message + aiTag;
+  showBankInfo();
+}
+async function reextractQuestions() {
+  const filename = document.getElementById('pdf-select').value;
+  if (!filename) return;
+  if (!confirm('重新提取将覆盖已有题目，确定？')) return;
+  const btn = document.getElementById('extract-btn');
+  btn.disabled = true; btn.innerHTML = '⏳ 重新提取中...';
+  const res = await fetch('/api/pdf/questions/reextract', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({filename})});
+  const data = await res.json();
+  btn.disabled = false; btn.innerHTML = '📥 提取题目';
+  if (data.error) { alert(data.error); return; }
+  currentQuestions = data.questions;
+  quizProgress[filename] = 0;
+  localStorage.setItem('quizProgress', JSON.stringify(quizProgress));
+  showBankInfo();
+}
+function togglePreview() {
+  const el = document.getElementById('quiz-preview-panel');
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<div class="card" style="max-height:400px;overflow-y:auto"><h3>📋 题目列表（共${currentQuestions.length}题）</h3>${currentQuestions.map((q,i) => `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px"><strong>${q.id}.</strong> ${q.question.substring(0,80)}${q.question.length>80?'...':''}</div>`).join('')}</div>`;
+}
+async function uploadPDF(input) {
+  if (!input.files[0]) return;
+  const form = new FormData(); form.append('file', input.files[0]);
+  const btn = input.parentElement; btn.textContent = '⏳ 上传中...';
+  const d = await(await fetch('/api/pdf/upload', {method:'POST', body:form})).json();
+  btn.innerHTML = '📤 上传PDF <input type="file" accept=".pdf" style="display:none" onchange="uploadPDF(this)">';
+  if (d.error) { alert(d.error); return; }
+  alert(d.message); loadPDFs();
+}
+
+// 开始刷题
+function startPractice(mode) {
+  if (!currentQuestions.length) { alert('请先提取题目'); return; }
+  const filename = document.getElementById('pdf-select').value;
+  const randomCount = parseInt(document.getElementById('random-count').value) || 20;
+  const examCount = parseInt(document.getElementById('exam-count').value) || 10;
+  let questions = [];
+  if (mode === 'sequential') {
+    const startIdx = quizProgress[filename] || 0;
+    questions = currentQuestions.slice(startIdx, startIdx + 20);
+    if (!questions.length) { questions = currentQuestions.slice(0, 20); quizProgress[filename] = 0; }
+    quizData = {questions, current:0, score:0, total:questions.length, answered:[], userAnswers:{}, mode:'practice', source:filename, examTimer:null, examTimeLeft:0, isSequential:true, startIndex:quizProgress[filename]||0};
+  } else if (mode === 'random') {
+    questions = [...currentQuestions].sort(() => Math.random() - 0.5).slice(0, randomCount);
+    quizData = {questions, current:0, score:0, total:questions.length, answered:[], userAnswers:{}, mode:'practice', source:filename, examTimer:null, examTimeLeft:0};
+  } else {
+    questions = [...currentQuestions].sort(() => Math.random() - 0.5).slice(0, examCount);
+    quizData = {questions, current:0, score:0, total:questions.length, answered:[], userAnswers:{}, mode:'exam', source:filename, examTimer:null, examTimeLeft:0};
+  }
+  enterQuizPractice();
+  if (mode === 'exam') startExamTimer();
+  renderQuestion();
+}
+
+function enterQuizPractice() {
+  document.getElementById('page-quiz').classList.remove('active');
+  document.getElementById('page-quiz-practice').classList.add('active');
+  updateQuizProgress();
+}
+function exitQuizPractice() {
+  if (quizData.examTimer) clearInterval(quizData.examTimer);
+  document.getElementById('page-quiz-practice').classList.remove('active');
+  document.getElementById('page-quiz').classList.add('active');
+  showBankInfo();
+}
+function updateQuizProgress() {
+  const pct = quizData.total ? Math.round((quizData.current / quizData.total) * 100) : 0;
+  document.getElementById('quiz-progress-fill').style.width = pct + '%';
+  let info = `第 ${quizData.current + 1}/${quizData.total} 题`;
+  if (quizData.isSequential) info += ` · 总进度 ${quizData.startIndex + quizData.current + 1}/${currentQuestions.length}`;
+  if (quizData.mode === 'exam') info += ' · 模拟考试';
+  document.getElementById('quiz-progress-info').textContent = info;
+  const el = document.getElementById('quiz-stats-bar');
+  if (quizData.answered.length > 0) {
+    el.innerHTML = `<div class="stat-card"><div class="num">${quizData.answered.length}/${quizData.total}</div><div class="label">已答</div></div><div class="stat-card"><div class="num">${quizData.score}</div><div class="label">正确</div></div><div class="stat-card"><div class="num">${Math.round(quizData.score/Math.max(quizData.answered.length,1)*100)}%</div><div class="label">正确率</div></div>`;
+  } else { el.innerHTML = ''; }
+}
+function startExamTimer() {
+  quizData.examTimeLeft = quizData.total * 60;
+  updateTimerDisplay();
+  quizData.examTimer = setInterval(() => { quizData.examTimeLeft--; updateTimerDisplay(); if (quizData.examTimeLeft <= 0) { clearInterval(quizData.examTimer); finishExam(); } }, 1000);
+}
+function updateTimerDisplay() {
+  const m = Math.floor(quizData.examTimeLeft / 60), s = quizData.examTimeLeft % 60;
+  const timerEl = document.getElementById('exam-timer');
+  if (timerEl) timerEl.textContent = `⏱ ${m}:${s.toString().padStart(2, '0')}`;
+}
+function renderQuestion() {
+  const area = document.getElementById('quiz-area');
+  const q = quizData.questions[quizData.current];
+  if (!q) { if (quizData.mode === 'exam') finishExam(); else showQuizSummary(); return; }
+  updateQuizProgress();
+  const timer = quizData.mode === 'exam' ? `<div class="timer" id="exam-timer"></div>` : '';
+  area.innerHTML = `${timer}<div class="card"><div style="font-size:15px;font-weight:600;margin-bottom:16px;line-height:1.8">${q.id || quizData.current+1}. ${q.question}</div>${Object.entries(q.options).map(([k,v]) => `<div class="quiz-option" data-key="${k}" onclick="selectOption(this,'${k}')">${k}. ${v}</div>`).join('')}<div id="q-feedback"></div></div>`;
+  if (quizData.mode === 'exam') updateTimerDisplay();
+}
+function selectOption(el, key) {
+  const q = quizData.questions[quizData.current];
+  if (quizData.answered.includes(quizData.current)) return;
+  quizData.answered.push(quizData.current);
+  quizData.userAnswers[quizData.current] = key;
+
+  // 顺序刷题更新进度
+  if (quizData.isSequential) {
+    const filename = quizData.source;
+    quizProgress[filename] = quizData.startIndex + quizData.answered.length;
+    localStorage.setItem('quizProgress', JSON.stringify(quizProgress));
+  }
+
+  // 考试模式
+  if (quizData.mode === 'exam') { el.classList.add('selected'); setTimeout(() => { quizData.current++; renderQuestion(); }, 300); return; }
+
+  // 练习模式
+  const hasAnswer = q.answer && q.answer.trim();
+  const isCorrect = hasAnswer ? key === q.answer : null;
+  if (isCorrect === true) quizData.score++;
+  if (isCorrect === false) {
+    fetch('/api/wrong-book', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:q.question, options:q.options, correct_answer:q.answer, user_answer:key, source:quizData.source})});
+  }
+  updateQuizProgress();
+
+  const options = el.parentElement.querySelectorAll('.quiz-option');
+  if (hasAnswer) {
+    options.forEach(o => { o.style.pointerEvents='none'; if(o.dataset.key===q.answer) o.classList.add('correct','show-correct'); if(o.dataset.key===key&&key!==q.answer) o.classList.add('wrong'); });
+  } else {
+    options.forEach(o => { o.style.pointerEvents='none'; }); el.classList.add('selected');
+  }
+
+  const fb = document.getElementById('q-feedback');
+  let resultHtml = '';
+  if (hasAnswer) {
+    resultHtml = `<div class="quiz-result ${isCorrect?'correct-result':'wrong-result'}">${isCorrect?'✅ 正确！':'❌ 错误，正确答案是 '+q.answer}</div>`;
+  } else {
+    resultHtml = `<div class="quiz-result" style="background:var(--primary-light);border:1px solid var(--primary);color:var(--primary)">已选择 ${key}（该题无标准答案，可点击解析让AI判断）</div>`;
+  }
+  fb.innerHTML = `${resultHtml}<div style="margin-top:10px;display:flex;gap:8px"><button class="btn btn-sm btn-outline" onclick="requestAnalysis(${quizData.current})">📖 查看解析</button>${quizData.current<quizData.total-1?`<button class="btn btn-sm" onclick="quizData.current++;renderQuestion()">下一题 →</button>`:`<button class="btn btn-sm btn-success" onclick="showQuizSummary()">查看成绩</button>`}</div><div id="analysis-box-${quizData.current}"></div>`;
+}
+async function requestAnalysis(idx) {
+  const box = document.getElementById('analysis-box-' + idx);
+  if (!box) return;
+  box.innerHTML = '<div class="quiz-analysis"><div class="loading">AI解析中</div></div>';
+  const q = quizData.questions[idx];
+  const userAns = quizData.userAnswers[idx];
+  const res = await fetch('/api/pdf/questions/analyze', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:q.question, options:q.options, correct_answer:q.answer||'', user_answer:userAns})});
+  const data = await res.json();
+  box.innerHTML = `<div class="quiz-analysis" style="margin-top:10px">${data.analysis_html || data.analysis || ''}</div>`;
+}
+async function finishExam() {
+  if (quizData.examTimer) clearInterval(quizData.examTimer);
+  await fetch('/api/quiz-history', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({total:quizData.total, correct:quizData.score, source:quizData.source, mode:'exam'})});
+  const pct = quizData.total ? Math.round(quizData.score / quizData.total * 100) : 0;
+  document.getElementById('quiz-area').innerHTML = `<div class="card" style="text-align:center;padding:40px"><h3>🎯 模拟考试结束</h3><div style="font-size:48px;font-weight:800;color:${pct>=60?'var(--success)':'var(--danger)'};margin:20px 0">${pct}<span style="font-size:18px">分</span></div><p style="color:var(--text2)">答对 ${quizData.score}/${quizData.total} 题</p><div style="margin-top:20px;display:flex;gap:10px;justify-content:center"><button class="btn" onclick="reviewExam()">📋 查看详情</button><button class="btn btn-outline" onclick="exitQuizPractice()">返回</button></div></div>`;
+}
+function reviewExam() {
+  const area = document.getElementById('quiz-area');
+  let html = '<div class="card"><h3>📋 考试回顾</h3>';
+  quizData.questions.forEach((q, i) => { const userAns = quizData.userAnswers[i]||'未答'; const isCorrect = q.answer ? userAns===q.answer : null; html += `<div style="padding:10px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;font-weight:600;margin-bottom:4px">${q.id||i+1}. ${q.question.substring(0,60)}...</div><div style="font-size:12px;color:${isCorrect===true?'var(--success)':isCorrect===false?'var(--danger)':'var(--text2)'}">你选：${userAns}${q.answer?' | 正确：'+q.answer:''} ${isCorrect===true?'✅':isCorrect===false?'❌':''}</div><button class="btn btn-sm btn-ghost" onclick="requestAnalysis(${i})">解析</button><div id="analysis-box-${i}"></div></div>`; });
+  html += '</div><button class="btn btn-outline" style="margin-top:12px" onclick="exitQuizPractice()">返回</button>';
+  area.innerHTML = html;
+}
+async function showQuizSummary() {
+  await fetch('/api/quiz-history', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({total:quizData.total, correct:quizData.score, source:quizData.source, mode:'practice'})});
+  const pct = quizData.total ? Math.round(quizData.score / quizData.total * 100) : 0;
+  document.getElementById('quiz-area').innerHTML = `<div class="card" style="text-align:center;padding:40px"><h3>📝 练习完成</h3><div style="font-size:48px;font-weight:800;color:${pct>=60?'var(--success)':'var(--danger)'};margin:20px 0">${pct}<span style="font-size:18px">分</span></div><p style="color:var(--text2)">答对 ${quizData.score}/${quizData.total} 题</p><button class="btn" style="margin-top:20px" onclick="exitQuizPractice()">返回</button></div>`;
+}
+
+// 今日随堂测验
+async function loadDailyQuiz() {
+  const el = document.getElementById('daily-quiz-section');
+  const data = await(await fetch('/api/daily-quiz')).json();
+  if (data.questions && data.questions.length) {
+    el.innerHTML = `<div class="card"><h3>💪 今日随堂测验 <span class="tag" style="margin-left:8px">${data.date}</span></h3><div id="daily-quiz-area"></div></div>`;
+    window.dailyQuizData = {questions: data.questions, current: 0, score: 0, answered: [], userAnswers: {}};
+    renderDailyQuestion();
+  } else { el.innerHTML = ''; }
+}
+function renderDailyQuestion() {
+  const area = document.getElementById('daily-quiz-area');
+  const dq = window.dailyQuizData;
+  const q = dq.questions[dq.current];
+  if (!q) { area.innerHTML = `<div style="text-align:center;padding:16px"><p style="font-size:14px;font-weight:600;color:${dq.score===dq.questions.length?'var(--success)':'var(--primary)'}">答对 ${dq.score}/${dq.questions.length} 题</p><button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="window.dailyQuizData.current=0;window.dailyQuizData.score=0;window.dailyQuizData.answered=[];window.dailyQuizData.userAnswers={};renderDailyQuestion()">重做</button></div>`; return; }
+  area.innerHTML = `<div style="font-size:13px;color:var(--text2);margin-bottom:8px">第 ${dq.current+1}/${dq.questions.length} 题</div><div style="font-size:14px;font-weight:600;margin-bottom:12px;line-height:1.6">${q.question}</div>${Object.entries(q.options).map(([k,v]) => `<div class="quiz-option" data-key="${k}" onclick="selectDailyOption(this,'${k}')">${k}. ${v}</div>`).join('')}<div id="daily-fb"></div>`;
+}
+function selectDailyOption(el, key) {
+  const dq = window.dailyQuizData;
+  if (dq.answered.includes(dq.current)) return;
+  dq.answered.push(dq.current); dq.userAnswers[dq.current] = key;
+  const q = dq.questions[dq.current];
+  const isCorrect = key === q.answer;
+  if (isCorrect) dq.score++;
+  const options = el.parentElement.querySelectorAll('.quiz-option');
+  options.forEach(o => { o.style.pointerEvents='none'; if(o.dataset.key===q.answer) o.classList.add('correct','show-correct'); if(o.dataset.key===key&&key!==q.answer) o.classList.add('wrong'); });
+  document.getElementById('daily-fb').innerHTML = `<div class="quiz-result ${isCorrect?'correct-result':'wrong-result'}" style="margin-top:8px">${isCorrect?'✅ 正确！':'❌ 错误，答案是 '+q.answer}</div>${dq.current<dq.questions.length-1?`<button class="btn btn-sm" style="margin-top:8px" onclick="window.dailyQuizData.current++;renderDailyQuestion()">下一题 →</button>`:`<button class="btn btn-sm btn-success" style="margin-top:8px" onclick="window.dailyQuizData.current++;renderDailyQuestion()">查看成绩</button>`}`;
+}
+// ===== Wrong Book =====
+async function loadWrongBook() {
+  const el = document.getElementById('wrong-list');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  const data = await(await fetch('/api/wrong-book')).json();
+  if (!data.length) { el.innerHTML = '<div class="card" style="text-align:center;color:var(--text2);padding:50px"><div style="font-size:40px;margin-bottom:12px">🎉</div><p>暂无错题，继续保持！</p></div>'; return; }
+  el.innerHTML = data.map(q => `<div class="wrong-item"><div class="q-text">${q.question}</div><div style="font-size:12px;margin:8px 0;display:flex;gap:12px;align-items:center"><span style="color:var(--danger);font-weight:600">你选：${q.user_answer}</span><span style="color:var(--success);font-weight:600">正确：${q.correct_answer}</span></div><div class="q-meta"><span class="tag">${q.source||'未知来源'}</span><span>${q.time||''}</span></div><div style="margin-top:10px;display:flex;gap:8px"><button class="btn btn-sm btn-outline" onclick="redoWrong(this,'${q.id}')">🔄 重做</button><button class="btn btn-sm btn-success" onclick="masterWrong('${q.id}')">✅ 已掌握</button></div></div>`).join('');
+}
+async function masterWrong(id) { await fetch('/api/wrong-book/'+id, {method:'DELETE'}); loadWrongBook(); }
+function redoWrong(btn, id) {
+  fetch('/api/wrong-book').then(r => r.json()).then(data => {
+    const q = data.find(x => x.id === id); if (!q) return;
+    const card = btn.closest('.wrong-item');
+    card.innerHTML = `<div style="font-size:14px;font-weight:600;margin-bottom:12px;line-height:1.6">${q.question}</div>${Object.entries(q.options).map(([k,v]) => `<div class="quiz-option" onclick="checkRedo(this,'${k}','${q.correct_answer}','${q.id}')">${k}. ${v}</div>`).join('')}<div id="redo-fb-${q.id}"></div>`;
+  });
+}
+function checkRedo(el, key, answer, id) {
+  const options = el.parentElement.querySelectorAll('.quiz-option');
+  options.forEach(o => { o.style.pointerEvents = 'none'; if (o.textContent.startsWith(answer)) o.classList.add('correct'); if (o.textContent.startsWith(key) && key !== answer) o.classList.add('wrong'); });
+  const isCorrect = key === answer;
+  document.getElementById('redo-fb-' + id).innerHTML = `<div class="quiz-result ${isCorrect?'correct-result':'wrong-result'}" style="margin-top:10px">${isCorrect?'✅ 这次答对了！':'❌ 还是错了，答案是 '+answer}</div>${isCorrect?`<button class="btn btn-sm btn-success" style="margin-top:8px" onclick="masterWrong('${id}')">标记已掌握</button>`:''}`;
+}
+
+// ===== Learning Stats =====
+async function loadStats() {
+  const el = document.getElementById('stats-content');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  const data = await(await fetch('/api/stats')).json();
+  const maxDay = Math.max(...data.week_data.map(d => d.total), 1);
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="num">${data.total_questions}</div><div class="label">总做题数</div></div>
+      <div class="stat-card"><div class="num">${data.accuracy}%</div><div class="label">总正确率</div></div>
+      <div class="stat-card"><div class="num">${data.wrong_count}</div><div class="label">待攻克错题</div></div>
+      <div class="stat-card"><div class="num">${data.total_quizzes}</div><div class="label">练习次数</div></div>
+    </div>
+    <div class="card"><h3>📈 近7天做题量</h3><div class="chart-bar">${data.week_data.map(d => `<div class="bar-col"><div class="bar-val">${d.total||''}</div><div class="bar" style="height:${d.total?d.total/maxDay*100:3}px;background:var(--primary)"></div><div class="bar-label">${d.date.slice(5)}</div></div>`).join('')}</div></div>
+    <div class="card"><h3>📊 近7天正确率</h3><div class="chart-bar">${data.week_data.map(d => { const pct=d.total?Math.round(d.correct/d.total*100):0; return `<div class="bar-col"><div class="bar-val">${d.total?pct+'%':''}</div><div class="bar" style="height:${d.total?pct:3}px;background:${pct>=60?'var(--success)':'var(--danger)'}"></div><div class="bar-label">${d.date.slice(5)}</div></div>`; }).join('')}</div></div>`;
+}
+
+// ===== Knowledge Base Management =====
+let currentUploadCollection = '';
+async function loadCollections() {
+  const el = document.getElementById('collections-list');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  const data = await(await fetch('/api/collections')).json();
+  el.innerHTML = data.map(c => `<div class="card" style="display:flex;justify-content:space-between;align-items:center"><div><div style="font-weight:600;font-size:14px">${c.display_name||c.name}</div><div style="font-size:12px;color:var(--text2);margin-top:3px">${c.metadata.description||'无描述'} · ${c.count} 条记录</div></div><div style="display:flex;gap:8px"><button class="btn btn-sm btn-outline" onclick="openUpload('${c.name}')">📥 上传</button>${c.name!=='shizheng_news'?`<button class="btn btn-sm btn-danger" onclick="deleteCollection('${c.name}')">删除</button>`:''}</div></div>`).join('');
+}
+async function createCollection() {
+  const name = document.getElementById('new-kb-name').value.trim(), desc = document.getElementById('new-kb-desc').value.trim();
+  if (!name) { alert('请输入名称'); return; }
+  const d = await(await fetch('/api/collections', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, description:desc})})).json();
+  if (d.error) { alert(d.error); return; }
+  document.getElementById('new-kb-name').value = '';
+  document.getElementById('new-kb-desc').value = '';
+  loadCollections();
+}
+function openUpload(name) { currentUploadCollection = name; document.getElementById('upload-section').style.display = 'block'; document.getElementById('upload-title').textContent = '上传内容到「' + name + '」'; }
+async function uploadToCollection() {
+  const title = document.getElementById('upload-doc-title').value.trim() || '手动添加', text = document.getElementById('upload-doc-text').value.trim();
+  if (!text) { alert('请输入内容'); return; }
+  const d = await(await fetch('/api/collections/' + currentUploadCollection + '/upload', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, text})})).json();
+  if (d.error) { alert(d.error); return; }
+  alert(d.message); document.getElementById('upload-doc-title').value = ''; document.getElementById('upload-doc-text').value = ''; loadCollections();
+}
+async function deleteCollection(name) { if (!confirm('确定删除？不可恢复。')) return; await fetch('/api/collections/' + name, {method:'DELETE'}); loadCollections(); }
+
+// ===== Init =====
+loadArchives();
+</script>
+</body>
+</html>

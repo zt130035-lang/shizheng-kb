@@ -1,0 +1,7 @@
+flask==3.1.0
+gunicorn==23.0.0
+PyMuPDF==1.25.1
+requests==2.32.3
+chromadb==0.5.23
+markdown==3.7
+werkzeug==3.1.3

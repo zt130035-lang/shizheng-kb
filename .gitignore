@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+data/knowledge_db/
+data/user_data.json
+data/pdf_uploads/*.pdf
+.plan
