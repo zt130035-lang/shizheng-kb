@@ -54,9 +54,150 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-97ca5455764543a8b57f63
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 
+# GitHub 自动同步配置
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "zt130035-lang/shizheng-kb")
+
 app = Flask(__name__, static_folder=STATIC_DIR)
 
 # ========== 工具函数 ==========
+
+def git_sync_to_github(message: str = "auto: sync data"):
+    """将数据文件自动同步到GitHub（通过API，无需本地git）"""
+    if not GITHUB_TOKEN:
+        print("[GIT-SYNC] 未配置 GITHUB_TOKEN，跳过同步")
+        return False
+
+    import base64
+    api_base = f"https://api.github.com/repos/{GITHUB_REPO}"
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+
+    # 收集需要同步的文件
+    sync_files = []
+
+    # 新闻归档
+    for f in glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md")):
+        rel_path = f"data/news_archive/{os.path.basename(f)}"
+        sync_files.append((f, rel_path))
+
+    # 日报
+    for f in glob.glob(os.path.join(DAILY_REPORTS_DIR, "*.md")):
+        rel_path = f"data/daily_reports/{os.path.basename(f)}"
+        sync_files.append((f, rel_path))
+
+    # 题库 JSON
+    pdf_q_dir = os.path.join(DATA_DIR, "pdf_questions")
+    if os.path.isdir(pdf_q_dir):
+        for f in glob.glob(os.path.join(pdf_q_dir, "*.json")):
+            rel_path = f"data/pdf_questions/{os.path.basename(f)}"
+            sync_files.append((f, rel_path))
+
+    if not sync_files:
+        print("[GIT-SYNC] 无文件需要同步")
+        return True
+
+    # 获取最新 commit SHA（main 分支）
+    try:
+        ref_resp = requests.get(f"{api_base}/git/ref/heads/main", headers=headers, timeout=15)
+        if ref_resp.status_code != 200:
+            print(f"[GIT-SYNC] 获取ref失败: {ref_resp.status_code}")
+            return False
+        latest_commit_sha = ref_resp.json()["object"]["sha"]
+
+        # 获取该 commit 的 tree
+        commit_resp = requests.get(f"{api_base}/git/commits/{latest_commit_sha}", headers=headers, timeout=15)
+        base_tree_sha = commit_resp.json()["tree"]["sha"]
+    except Exception as e:
+        print(f"[GIT-SYNC] 获取仓库信息失败: {e}")
+        return False
+
+    # 创建 blobs 并构建 tree
+    tree_items = []
+    uploaded = 0
+    for local_path, repo_path in sync_files:
+        try:
+            with open(local_path, "rb") as f:
+                content = f.read()
+            b64_content = base64.b64encode(content).decode("utf-8")
+            blob_resp = requests.post(
+                f"{api_base}/git/blobs",
+                headers=headers,
+                json={"content": b64_content, "encoding": "base64"},
+                timeout=30
+            )
+            if blob_resp.status_code == 201:
+                blob_sha = blob_resp.json()["sha"]
+                tree_items.append({
+                    "path": repo_path,
+                    "mode": "100644",
+                    "type": "blob",
+                    "sha": blob_sha
+                })
+                uploaded += 1
+        except Exception as e:
+            print(f"[GIT-SYNC] 上传blob失败 {repo_path}: {e}")
+
+    if not tree_items:
+        print("[GIT-SYNC] 无文件上传成功")
+        return False
+
+    # 创建新 tree
+    try:
+        tree_resp = requests.post(
+            f"{api_base}/git/trees",
+            headers=headers,
+            json={"base_tree": base_tree_sha, "tree": tree_items},
+            timeout=30
+        )
+        if tree_resp.status_code != 201:
+            print(f"[GIT-SYNC] 创建tree失败: {tree_resp.text[:200]}")
+            return False
+        new_tree_sha = tree_resp.json()["sha"]
+    except Exception as e:
+        print(f"[GIT-SYNC] 创建tree异常: {e}")
+        return False
+
+    # 创建 commit
+    try:
+        commit_data = {
+            "message": message,
+            "tree": new_tree_sha,
+            "parents": [latest_commit_sha]
+        }
+        commit_resp = requests.post(
+            f"{api_base}/git/commits",
+            headers=headers,
+            json=commit_data,
+            timeout=15
+        )
+        if commit_resp.status_code != 201:
+            print(f"[GIT-SYNC] 创建commit失败: {commit_resp.text[:200]}")
+            return False
+        new_commit_sha = commit_resp.json()["sha"]
+    except Exception as e:
+        print(f"[GIT-SYNC] 创建commit异常: {e}")
+        return False
+
+    # 更新 ref 指向新 commit
+    try:
+        ref_update = requests.patch(
+            f"{api_base}/git/refs/heads/main",
+            headers=headers,
+            json={"sha": new_commit_sha},
+            timeout=15
+        )
+        if ref_update.status_code == 200:
+            print(f"[GIT-SYNC] ✅ 同步成功！{uploaded}个文件已推送到GitHub")
+            return True
+        else:
+            print(f"[GIT-SYNC] 更新ref失败: {ref_update.text[:200]}")
+            return False
+    except Exception as e:
+        print(f"[GIT-SYNC] 更新ref异常: {e}")
+        return False
 
 def get_embedding(texts: List[str]) -> List[List[float]]:
     """调用SiliconFlow获取文本向量"""
@@ -305,6 +446,12 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
                 print(f"[CRAWL] 知识库已更新，新增{len(saved_files)}篇")
             except Exception as e:
                 print(f"[CRAWL] 知识库嵌入失败: {e}")
+
+        # 自动同步到GitHub（数据持久化）
+        try:
+            git_sync_to_github(f"auto: 手动爬取 {today}")
+        except Exception as e:
+            print(f"[CRAWL] GitHub同步失败: {e}")
 
         print(f"[CRAWL] 手动爬取完成")
 
@@ -973,6 +1120,13 @@ def extract_questions_from_pdf():
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(questions, f, ensure_ascii=False, indent=2)
 
+    # 同步到GitHub
+    try:
+        import threading as _t
+        _t.Thread(target=git_sync_to_github, args=(f"auto: 提取题目 {filename}",), daemon=True).start()
+    except Exception:
+        pass
+
     msg = f"AI生成{len(questions)}道题目" if ai_generated else f"成功提取{len(questions)}道题目"
     return jsonify({"message": msg, "count": len(questions), "questions": questions, "ai_generated": ai_generated})
 
@@ -1538,6 +1692,12 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
             except Exception as e:
                 print(f"[CRON] Bark推送失败: {e}")
 
+        # 6. 自动同步到GitHub（数据持久化）
+        try:
+            git_sync_to_github(f"auto: 每日爬取 {today}")
+        except Exception as e:
+            print(f"[CRON] GitHub同步失败: {e}")
+
         print(f"[CRON] 每日爬取完成")
 
     # 异步执行，避免超时
@@ -1628,6 +1788,22 @@ def debug_embedding():
             return jsonify({"success": False, "error": "返回空结果"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/sync-github", methods=["POST", "GET"])
+def manual_sync_github():
+    """手动触发数据同步到GitHub"""
+    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
+    if secret != CRON_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+    try:
+        success = git_sync_to_github("auto: 手动触发同步")
+        if success:
+            return jsonify({"success": True, "message": "数据已同步到GitHub"})
+        else:
+            return jsonify({"success": False, "message": "同步失败，请检查GITHUB_TOKEN配置"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ========== 启动 ==========
