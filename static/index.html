@@ -85,6 +85,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .tag-danger { background: var(--danger-bg); color: var(--danger); }
 .tag-warning { background: var(--warning-bg); color: var(--warning); }
 
+/* ===== Essay Training ===== */
+.essay-tabs button { padding: 8px 16px; border: none; background: transparent; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text2); transition: var(--transition); }
+.essay-tabs button.active { background: var(--card); color: var(--primary); box-shadow: var(--shadow-sm); }
+.essay-panel { display: none; } .essay-panel.active { display: block; }
+.essay-result { margin-top: 20px; }
+.essay-result .card { font-size: 13px; line-height: 1.8; }
+.essay-result h2 { font-size: 16px; margin: 20px 0 10px; color: var(--primary-dark); }
+.essay-result h3 { font-size: 14px; margin: 16px 0 8px; }
+.essay-result table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12px; }
+.essay-result table th, .essay-result table td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+.essay-result table th { background: var(--bg2); font-weight: 600; }
+.essay-result hr { border: none; border-top: 2px solid var(--primary-bg); margin: 24px 0; }
+.essay-result ul, .essay-result ol { padding-left: 20px; margin: 8px 0; }
+.essay-result li { margin-bottom: 4px; }
+.essay-kb-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--success-bg); color: var(--success); border-radius: 20px; font-size: 11px; font-weight: 500; margin-bottom: 12px; }
+
 /* ===== News Archive ===== */
 .date-group { margin-bottom: 24px; }
 .date-group .date-header { font-size: 13px; color: var(--text2); margin-bottom: 8px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
@@ -207,6 +223,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     <a href="#" data-page="quiz"><span class="icon">✏️</span><span>PDF做题</span></a>
     <a href="#" data-page="wrong"><span class="icon">📕</span><span>错题本</span></a>
     <a href="#" data-page="query"><span class="icon">🔍</span><span>知识查询</span></a>
+    <a href="#" data-page="essay"><span class="icon">✍️</span><span>申论训练</span></a>
     <a href="#" data-page="stats"><span class="icon">📊</span><span>学习统计</span></a>
     <a href="#" data-page="manage"><span class="icon">⚙️</span><span>知识库管理</span></a>
   </nav>
@@ -353,6 +370,74 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     <button class="btn" onclick="doQuery()">🔍 搜索</button>
   </div>
   <div id="query-results"></div>
+</div>
+
+<!-- 申论训练 -->
+<div class="page" id="page-essay">
+  <div class="page-header">
+    <h2>✍️ 申论训练</h2>
+    <div class="desc">AI批改打分 · 辅助写作 · 润色优化 — 结合知识库时政素材</div>
+  </div>
+  <div class="essay-tabs" style="display:flex;gap:4px;margin-bottom:20px;background:var(--bg2);padding:4px;border-radius:var(--radius-sm);">
+    <button class="essay-tab active" onclick="switchEssayTab('review')">📝 批改打分</button>
+    <button class="essay-tab" onclick="switchEssayTab('assist')">✏️ 辅助写作</button>
+    <button class="essay-tab" onclick="switchEssayTab('polish')">💎 润色优化</button>
+  </div>
+
+  <!-- 批改打分 -->
+  <div class="essay-panel active" id="essay-review">
+    <div class="card">
+      <h3>提交申论进行AI批改</h3>
+      <div class="form-group"><label>题目（选填）</label><input type="text" id="review-topic" placeholder="如：请谈谈对乡村振兴的看法"></div>
+      <div class="form-group"><label>你的申论</label><textarea id="review-essay" style="min-height:240px" placeholder="粘贴你的申论全文..."></textarea></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--text2)" id="review-count">0 字</span>
+        <button class="btn" onclick="submitEssayReview()" id="review-btn">🎯 开始批改</button>
+      </div>
+    </div>
+    <div id="review-result"></div>
+  </div>
+
+  <!-- 辅助写作 -->
+  <div class="essay-panel" id="essay-assist">
+    <div class="card">
+      <h3>AI生成示范申论</h3>
+      <div class="form-group"><label>申论题目</label><input type="text" id="assist-topic" placeholder="如：以"数字治理"为主题撰写申论"></div>
+      <div class="form-group"><label>背景材料（选填）</label><textarea id="assist-material" style="min-height:120px" placeholder="粘贴题目附带的背景材料..."></textarea></div>
+      <div class="form-group" style="display:flex;gap:12px;align-items:center">
+        <label style="margin:0;white-space:nowrap">字数要求</label>
+        <select id="assist-wordcount" style="width:auto;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+          <option value="800">约800字</option>
+          <option value="1000" selected>约1000字</option>
+          <option value="1200">约1200字</option>
+          <option value="1500">约1500字</option>
+        </select>
+      </div>
+      <button class="btn" onclick="submitEssayAssist()" id="assist-btn">✨ AI生成</button>
+    </div>
+    <div id="assist-result"></div>
+  </div>
+
+  <!-- 润色优化 -->
+  <div class="essay-panel" id="essay-polish">
+    <div class="card">
+      <h3>润色优化你的文章</h3>
+      <div class="form-group" style="display:flex;gap:12px;align-items:center">
+        <label style="margin:0;white-space:nowrap">文风</label>
+        <select id="polish-style" style="width:auto;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+          <option value="政论">政论（严肃规范）</option>
+          <option value="时评">时评（理性分析）</option>
+          <option value="议论">议论（论证有力）</option>
+        </select>
+      </div>
+      <div class="form-group"><label>你的文章</label><textarea id="polish-essay" style="min-height:240px" placeholder="粘贴需要润色的文章..."></textarea></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--text2)" id="polish-count">0 字</span>
+        <button class="btn" onclick="submitEssayPolish()" id="polish-btn">💎 润色优化</button>
+      </div>
+    </div>
+    <div id="polish-result"></div>
+  </div>
 </div>
 
 <!-- 学习统计 -->
@@ -915,6 +1000,103 @@ async function uploadToCollection() {
   alert(d.message); document.getElementById('upload-doc-title').value = ''; document.getElementById('upload-doc-text').value = ''; loadCollections();
 }
 async function deleteCollection(name) { if (!confirm('确定删除？不可恢复。')) return; await fetch('/api/collections/' + name, {method:'DELETE'}); loadCollections(); }
+
+// ===== Essay Training =====
+function switchEssayTab(tab) {
+  document.querySelectorAll('.essay-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.essay-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.essay-tab[onclick*="${tab}"]`).classList.add('active');
+  document.getElementById('essay-' + tab).classList.add('active');
+}
+
+// 字数统计
+document.getElementById('review-essay').addEventListener('input', e => {
+  document.getElementById('review-count').textContent = e.target.value.length + ' 字';
+});
+document.getElementById('polish-essay').addEventListener('input', e => {
+  document.getElementById('polish-count').textContent = e.target.value.length + ' 字';
+});
+
+async function submitEssayReview() {
+  const essay = document.getElementById('review-essay').value.trim();
+  const topic = document.getElementById('review-topic').value.trim();
+  if (!essay) { alert('请输入申论内容'); return; }
+  if (essay.length < 50) { alert('文章太短，至少50字'); return; }
+
+  const btn = document.getElementById('review-btn');
+  const resultEl = document.getElementById('review-result');
+  btn.disabled = true; btn.textContent = '⏳ AI批改中...';
+  resultEl.innerHTML = '<div class="loading">AI正在批改你的申论，请稍候（约30-60秒）</div>';
+
+  try {
+    const res = await fetch('/api/essay/review', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({essay, topic})
+    });
+    const data = await res.json();
+    if (data.error) { resultEl.innerHTML = `<div class="card" style="color:var(--danger)">${data.error}</div>`; return; }
+    const kbBadge = data.has_kb_materials ? '<div class="essay-kb-badge">📚 已参考知识库素材</div>' : '';
+    resultEl.innerHTML = `<div class="essay-result"><div class="card">${kbBadge}${data.html}</div></div>`;
+  } catch(e) {
+    resultEl.innerHTML = `<div class="card" style="color:var(--danger)">请求失败：${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '🎯 开始批改';
+  }
+}
+
+async function submitEssayAssist() {
+  const topic = document.getElementById('assist-topic').value.trim();
+  const material = document.getElementById('assist-material').value.trim();
+  const wordCount = document.getElementById('assist-wordcount').value;
+  if (!topic) { alert('请输入申论题目'); return; }
+
+  const btn = document.getElementById('assist-btn');
+  const resultEl = document.getElementById('assist-result');
+  btn.disabled = true; btn.textContent = '⏳ AI写作中...';
+  resultEl.innerHTML = '<div class="loading">AI正在生成示范申论，请稍候（约30-60秒）</div>';
+
+  try {
+    const res = await fetch('/api/essay/assist', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({topic, material, word_count: parseInt(wordCount)})
+    });
+    const data = await res.json();
+    if (data.error) { resultEl.innerHTML = `<div class="card" style="color:var(--danger)">${data.error}</div>`; return; }
+    const kbBadge = data.has_kb_materials ? '<div class="essay-kb-badge">📚 已融入知识库素材</div>' : '';
+    resultEl.innerHTML = `<div class="essay-result"><div class="card">${kbBadge}${data.html}</div></div>`;
+  } catch(e) {
+    resultEl.innerHTML = `<div class="card" style="color:var(--danger)">请求失败：${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ AI生成';
+  }
+}
+
+async function submitEssayPolish() {
+  const essay = document.getElementById('polish-essay').value.trim();
+  const style = document.getElementById('polish-style').value;
+  if (!essay) { alert('请输入需要润色的文章'); return; }
+  if (essay.length < 50) { alert('文章太短，至少50字'); return; }
+
+  const btn = document.getElementById('polish-btn');
+  const resultEl = document.getElementById('polish-result');
+  btn.disabled = true; btn.textContent = '⏳ AI润色中...';
+  resultEl.innerHTML = '<div class="loading">AI正在润色优化，请稍候（约30-60秒）</div>';
+
+  try {
+    const res = await fetch('/api/essay/polish', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({essay, style})
+    });
+    const data = await res.json();
+    if (data.error) { resultEl.innerHTML = `<div class="card" style="color:var(--danger)">${data.error}</div>`; return; }
+    const kbBadge = data.has_kb_materials ? '<div class="essay-kb-badge">📚 已参考知识库素材</div>' : '';
+    resultEl.innerHTML = `<div class="essay-result"><div class="card">${kbBadge}${data.html}</div></div>`;
+  } catch(e) {
+    resultEl.innerHTML = `<div class="card" style="color:var(--danger)">请求失败：${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '💎 润色优化';
+  }
+}
 
 // ===== Init =====
 loadArchives();

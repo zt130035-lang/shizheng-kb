@@ -1505,6 +1505,194 @@ def query_explain():
     return jsonify({"answer": answer, "html": html})
 
 
+# ========== 申论训练模块 ==========
+
+def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
+    """从知识库检索与文本相关的素材"""
+    client = get_chroma_client()
+    try:
+        collection = client.get_collection("shizheng_news")
+    except Exception:
+        return ""
+
+    # 提取关键句作为查询
+    query_text = text[:200] if len(text) > 200 else text
+    embeddings = get_embedding([query_text])
+    if not embeddings:
+        return ""
+
+    results = collection.query(query_embeddings=embeddings, n_results=top_k)
+    if not results["documents"][0]:
+        return ""
+
+    materials = []
+    for i, doc in enumerate(results["documents"][0]):
+        materials.append(f"【素材{i+1}】{doc[:300]}")
+    return "\n\n".join(materials)
+
+
+@app.route("/api/essay/review", methods=["POST"])
+def essay_review():
+    """申论批改打分"""
+    data = request.json
+    essay = data.get("essay", "").strip()
+    topic = data.get("topic", "").strip()
+
+    if not essay:
+        return jsonify({"error": "请输入申论内容"}), 400
+    if len(essay) < 50:
+        return jsonify({"error": "文章太短，至少50字"}), 400
+
+    # 从知识库检索相关素材
+    kb_materials = _search_kb_for_essay(essay)
+
+    topic_line = f"\n申论题目：{topic}" if topic else ""
+    materials_line = f"\n\n【知识库参考素材】\n{kb_materials}" if kb_materials else ""
+
+    prompt = f"""请批改以下申论文章，按照公务员考试评分标准进行评价。{topic_line}
+
+【用户文章】
+{essay}
+{materials_line}
+
+请严格按以下格式输出：
+
+## 📊 总体评分
+
+| 维度 | 分数 | 简评 |
+|------|------|------|
+| 结构布局 | /20 | |
+| 论点深度 | /25 | |
+| 素材运用 | /20 | |
+| 语言表达 | /20 | |
+| 政策理论 | /15 | |
+| **总分** | **/100** | |
+
+## 📝 整体评价
+[2-3句总结性评价]
+
+## 🔍 逐段批注
+
+[对文章各段落逐一给出具体修改建议，指出优点和问题]
+
+## ✅ 修改建议
+
+[列出3-5条最重要的改进方向]
+
+## 💡 推荐素材
+
+[基于知识库素材，推荐2-3个可以引用的时政案例/表述]"""
+
+    system = "你是资深公考申论阅卷专家，有10年申论批改经验。请按照国考申论评分标准进行客观、专业的批改，指出不足的同时肯定优点。"
+    answer = call_deepseek(prompt, system)
+    html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
+    return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
+
+
+@app.route("/api/essay/assist", methods=["POST"])
+def essay_assist():
+    """AI辅助写作"""
+    data = request.json
+    topic = data.get("topic", "").strip()
+    material = data.get("material", "").strip()
+    word_count = data.get("word_count", 1000)
+
+    if not topic:
+        return jsonify({"error": "请输入申论题目"}), 400
+
+    # 从知识库检索相关素材
+    kb_materials = _search_kb_for_essay(topic + " " + material)
+
+    material_line = f"\n\n【背景材料】\n{material}" if material else ""
+    kb_line = f"\n\n【知识库素材（请融入文章）】\n{kb_materials}" if kb_materials else ""
+
+    prompt = f"""请根据以下申论题目撰写一篇示范申论。
+
+【题目】{topic}{material_line}{kb_line}
+
+要求：
+1. 字数约{word_count}字
+2. 严格按照申论格式：标题 → 开头（引出主题）→ 分论点（2-3个）→ 结尾（总结升华）
+3. 融入时政热点和官方表述
+4. 语言规范，逻辑清晰
+5. 标注引用的素材来源
+
+请按以下格式输出：
+
+## ✍️ 示范申论
+
+[完整申论文章]
+
+---
+
+## 📌 写作思路解析
+
+- **标题**：[解释标题拟定思路]
+- **结构**：[解释分论点设置逻辑]
+- **素材运用**：[列出引用的时政案例]
+
+## 🎯 关键表述参考
+
+[列出3-5句可直接使用的官方规范表述]"""
+
+    system = "你是公务员考试申论辅导名师，擅长撰写高分申论范文。请结合最新时政，写出逻辑严谨、语言规范、有深度的申论。"
+    answer = call_deepseek(prompt, system)
+    html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
+    return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
+
+
+@app.route("/api/essay/polish", methods=["POST"])
+def essay_polish():
+    """申论润色优化"""
+    data = request.json
+    essay = data.get("essay", "").strip()
+    style = data.get("style", "政论")
+
+    if not essay:
+        return jsonify({"error": "请输入需要润色的文章"}), 400
+    if len(essay) < 50:
+        return jsonify({"error": "文章太短，至少50字"}), 400
+
+    # 从知识库检索相关素材
+    kb_materials = _search_kb_for_essay(essay)
+    kb_line = f"\n\n【知识库参考素材（可用于补充）】\n{kb_materials}" if kb_materials else ""
+
+    prompt = f"""请将以下文章按照「{style}」风格进行润色优化，使其更符合公务员申论写作规范。
+
+【原文】
+{essay}{kb_line}
+
+润色要求：
+1. 保持原文核心观点不变
+2. 优化语言表达，使用官方规范用语
+3. 加强论证逻辑，补充论据
+4. 如有相关时政素材，适当融入
+5. 纠正语病和不规范表述
+
+请按以下格式输出：
+
+## ✨ 润色后文章
+
+[完整的润色后文章]
+
+---
+
+## 📋 修改说明
+
+| 修改位置 | 原文 | 修改后 | 修改原因 |
+|----------|------|--------|----------|
+| ... | ... | ... | ... |
+
+## 💎 提升要点
+
+[总结3-5条主要提升点]"""
+
+    system = f"你是资深申论写作教练，专长{style}类文体。请在保持原文核心观点的基础上进行专业润色，提升文章质量。"
+    answer = call_deepseek(prompt, system)
+    html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
+    return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
+
+
 # ========== 定时爬取接口 ==========
 CRON_SECRET = os.environ.get("CRON_SECRET", "shizheng2026")
 
