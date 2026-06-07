@@ -381,6 +381,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
   <div class="essay-tabs" style="display:flex;gap:4px;margin-bottom:20px;background:var(--bg2);padding:4px;border-radius:var(--radius-sm);">
     <button class="essay-tab active" onclick="switchEssayTab('review')">📝 批改打分</button>
     <button class="essay-tab" onclick="switchEssayTab('assist')">✏️ 辅助写作</button>
+    <button class="essay-tab" onclick="switchEssayTab('compare')">📄 范文对比</button>
     <button class="essay-tab" onclick="switchEssayTab('polish')">💎 润色优化</button>
   </div>
 
@@ -416,6 +417,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
       <button class="btn" onclick="submitEssayAssist()" id="assist-btn">✨ AI生成</button>
     </div>
     <div id="assist-result"></div>
+  </div>
+
+  <!-- 范文对比 -->
+  <div class="essay-panel" id="essay-compare">
+    <div class="card">
+      <h3>上传题目 → AI写范文 → 对比修改</h3>
+      <div class="form-group">
+        <label>① 上传题目文件（PDF / Word .docx，选填）</label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="compare-file" accept=".pdf,.docx,.txt,.md" style="flex:1;min-width:200px;padding:8px;border:1.5px dashed var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:13px">
+          <button class="btn" onclick="extractCompareTopic()" id="compare-extract-btn" style="white-space:nowrap">📤 解析题目</button>
+        </div>
+        <div id="compare-extract-status" style="font-size:12px;color:var(--text2);margin-top:6px"></div>
+      </div>
+      <div class="form-group"><label>② 申论题目 / 写作要求</label><textarea id="compare-topic" style="min-height:80px" placeholder="可上传文件自动填充，或手动输入题目..."></textarea></div>
+      <div class="form-group"><label>背景材料（选填）</label><textarea id="compare-material" style="min-height:100px" placeholder="题目附带的背景材料..."></textarea></div>
+      <div class="form-group"><label>③ 你的作文</label><textarea id="compare-essay" style="min-height:220px" placeholder="粘贴你写的申论全文..."></textarea></div>
+      <div class="form-group" style="display:flex;gap:12px;align-items:center">
+        <label style="margin:0;white-space:nowrap">范文字数</label>
+        <select id="compare-wordcount" style="width:auto;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+          <option value="800">约800字</option>
+          <option value="1000" selected>约1000字</option>
+          <option value="1200">约1200字</option>
+          <option value="1500">约1500字</option>
+        </select>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:12px;color:var(--text2)" id="compare-count">0 字</span>
+        <button class="btn" onclick="submitEssayCompare()" id="compare-btn">🚀 生成范文并对比</button>
+      </div>
+    </div>
+    <div id="compare-result"></div>
   </div>
 
   <!-- 润色优化 -->
@@ -1016,6 +1049,9 @@ document.getElementById('review-essay').addEventListener('input', e => {
 document.getElementById('polish-essay').addEventListener('input', e => {
   document.getElementById('polish-count').textContent = e.target.value.length + ' 字';
 });
+document.getElementById('compare-essay').addEventListener('input', e => {
+  document.getElementById('compare-count').textContent = e.target.value.length + ' 字';
+});
 
 async function submitEssayReview() {
   const essay = document.getElementById('review-essay').value.trim();
@@ -1095,6 +1131,65 @@ async function submitEssayPolish() {
     resultEl.innerHTML = `<div class="card" style="color:var(--danger)">请求失败：${e.message}</div>`;
   } finally {
     btn.disabled = false; btn.textContent = '💎 润色优化';
+  }
+}
+
+async function extractCompareTopic() {
+  const fileInput = document.getElementById('compare-file');
+  const statusEl = document.getElementById('compare-extract-status');
+  if (!fileInput.files.length) { alert('请先选择题目文件'); return; }
+  const file = fileInput.files[0];
+  const btn = document.getElementById('compare-extract-btn');
+  btn.disabled = true; btn.textContent = '⏳ 解析中...';
+  statusEl.textContent = '正在提取并整理题目，请稍候...';
+  statusEl.style.color = 'var(--text2)';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/api/essay/extract-topic', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { statusEl.textContent = '❌ ' + data.error; statusEl.style.color = 'var(--danger)'; return; }
+    if (data.topic) document.getElementById('compare-topic').value = data.topic;
+    if (data.material) document.getElementById('compare-material').value = data.material;
+    const reqNote = data.requirements ? `（要求：${data.requirements}）` : '';
+    statusEl.textContent = `✅ 已解析题目${reqNote}，可手动调整后再生成`;
+    statusEl.style.color = 'var(--success)';
+    if (data.note) statusEl.textContent += '。' + data.note;
+  } catch(e) {
+    statusEl.textContent = '❌ 解析失败：' + e.message; statusEl.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false; btn.textContent = '📤 解析题目';
+  }
+}
+
+async function submitEssayCompare() {
+  const topic = document.getElementById('compare-topic').value.trim();
+  const material = document.getElementById('compare-material').value.trim();
+  const essay = document.getElementById('compare-essay').value.trim();
+  const word_count = document.getElementById('compare-wordcount').value;
+  if (!topic && !material) { alert('请先提供题目或背景材料（可上传文件解析）'); return; }
+  if (!essay) { alert('请输入你的作文'); return; }
+  if (essay.length < 50) { alert('你的作文太短，至少50字'); return; }
+
+  const btn = document.getElementById('compare-btn');
+  const resultEl = document.getElementById('compare-result');
+  btn.disabled = true; btn.textContent = '⏳ 生成对比中...';
+  resultEl.innerHTML = '<div class="loading">AI正在撰写范文并与你的作文对比，请稍候（约40-90秒）</div>';
+
+  try {
+    const res = await fetch('/api/essay/compare', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({topic, material, essay, word_count})
+    });
+    const data = await res.json();
+    if (data.error) { resultEl.innerHTML = `<div class="card" style="color:var(--danger)">${data.error}</div>`; return; }
+    const kbBadge = data.has_kb_materials ? '<div class="essay-kb-badge">📚 已融入知识库素材</div>' : '';
+    resultEl.innerHTML = `<div class="essay-result"><div class="card">${kbBadge}${data.html}</div></div>`;
+  } catch(e) {
+    resultEl.innerHTML = `<div class="card" style="color:var(--danger)">请求失败：${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '🚀 生成范文并对比';
   }
 }
 

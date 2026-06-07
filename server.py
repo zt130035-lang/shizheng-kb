@@ -266,6 +266,58 @@ def extract_pdf_text(filepath: str) -> str:
     return "\n".join(text_parts)
 
 
+def extract_docx_text(filepath: str) -> str:
+    """从Word(.docx)文档提取全部文本，含表格"""
+    from docx import Document
+    document = Document(filepath)
+    parts = [p.text for p in document.paragraphs if p.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def extract_document_text(filepath: str, filename: str = "") -> str:
+    """根据扩展名自动提取文档文本，支持 PDF / Word(.docx) / 纯文本"""
+    name = (filename or filepath).lower()
+    if name.endswith(".pdf"):
+        return extract_pdf_text(filepath)
+    if name.endswith(".docx"):
+        return extract_docx_text(filepath)
+    if name.endswith(".doc"):
+        raise ValueError("暂不支持旧版 .doc 格式，请另存为 .docx 或 PDF 后上传")
+    if name.endswith((".txt", ".md")):
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    # 兜底：按文本读取
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def _parse_json_loose(text: str):
+    """从AI返回中宽松解析JSON对象，兼容代码块包裹/前后多余文本"""
+    if not text:
+        return None
+    t = text.strip()
+    # 去掉markdown代码块标记
+    t = re.sub(r"^```(?:json)?\s*", "", t)
+    t = re.sub(r"\s*```$", "", t).strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    # 提取第一个 {...} 块
+    match = re.search(r"\{.*\}", t, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            return None
+    return None
+
+
 def sanitize_collection_name(name: str) -> str:
     """将用户输入的名称转为ChromaDB合法集合名
     ChromaDB要求: 3-512字符, [a-zA-Z0-9._-], 首尾必须是[a-zA-Z0-9]
@@ -1688,6 +1740,133 @@ def essay_polish():
 [总结3-5条主要提升点]"""
 
     system = f"你是资深申论写作教练，专长{style}类文体。请在保持原文核心观点的基础上进行专业润色，提升文章质量。"
+    answer = call_deepseek(prompt, system)
+    html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
+    return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
+
+
+@app.route("/api/essay/extract-topic", methods=["POST"])
+def essay_extract_topic():
+    """上传题目文件(PDF/Word)，提取并整理出申论题目与背景材料"""
+    if "file" not in request.files:
+        return jsonify({"error": "未选择文件"}), 400
+    file = request.files["file"]
+    fname = file.filename or ""
+    if not fname.lower().endswith((".pdf", ".docx", ".txt", ".md")):
+        return jsonify({"error": "仅支持 PDF、Word(.docx) 或文本文件"}), 400
+
+    safe = fname.replace("/", "_").replace("\\", "_")
+    filepath = os.path.join(PDF_UPLOADS_DIR, f"essay_topic_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe}")
+    file.save(filepath)
+
+    try:
+        raw_text = extract_document_text(filepath, fname)
+    except Exception as e:
+        return jsonify({"error": f"文件解析失败: {e}"}), 400
+    finally:
+        try:
+            os.remove(filepath)
+        except Exception:
+            pass
+
+    raw_text = raw_text.strip()
+    if not raw_text:
+        return jsonify({"error": "未能从文件中提取到文本（可能是扫描件图片）"}), 400
+
+    # 截断，避免超长
+    snippet = raw_text[:6000]
+    prompt = f"""下面是从用户上传的申论题目文件中提取的原始文本，可能包含背景材料、作答要求等。请你整理出结构化的题目信息。
+
+【原始文本】
+{snippet}
+
+请严格输出 JSON（不要任何额外解释、不要markdown代码块包裹）：
+{{
+  "topic": "申论作答的核心题目/写作要求（如果是大作文题，提炼出写作主题与要求）",
+  "material": "题目附带的背景材料摘要（精简到400字以内，保留关键数据与事例）",
+  "requirements": "字数、文体等具体作答要求"
+}}"""
+    system = "你是申论命题解析专家，擅长从题目文件中精准提取写作要求和背景材料。只输出合法JSON。"
+    answer = call_deepseek(prompt, system)
+
+    # 解析JSON
+    parsed = _parse_json_loose(answer)
+    if not parsed:
+        # 兜底：把全文当material返回
+        return jsonify({
+            "topic": "",
+            "material": raw_text[:2000],
+            "requirements": "",
+            "raw_len": len(raw_text),
+            "note": "未能自动结构化，已返回原文供你手动确认"
+        })
+    parsed["raw_len"] = len(raw_text)
+    return jsonify(parsed)
+
+
+@app.route("/api/essay/compare", methods=["POST"])
+def essay_compare():
+    """根据题目生成范文，并与用户作文逐项对比、给出修改建议"""
+    data = request.json
+    topic = data.get("topic", "").strip()
+    material = data.get("material", "").strip()
+    user_essay = data.get("essay", "").strip()
+    word_count = data.get("word_count", 1000)
+
+    if not topic and not material:
+        return jsonify({"error": "请先提供题目或背景材料"}), 400
+    if not user_essay:
+        return jsonify({"error": "请输入你的作文"}), 400
+    if len(user_essay) < 50:
+        return jsonify({"error": "你的作文太短，至少50字"}), 400
+
+    # 从知识库检索相关时政素材
+    kb_materials = _search_kb_for_essay((topic + " " + material + " " + user_essay)[:500])
+
+    material_line = f"\n\n【背景材料】\n{material}" if material else ""
+    kb_line = f"\n\n【知识库时政素材（写范文时请融入）】\n{kb_materials}" if kb_materials else ""
+
+    prompt = f"""你将完成两项任务：先根据题目撰写一篇高分范文，再把它与用户的作文对比，给出精准的修改方案。
+
+【题目/写作要求】
+{topic}{material_line}{kb_line}
+
+【用户的作文】
+{user_essay}
+
+请严格按以下 Markdown 格式输出：
+
+## ✍️ 高分范文
+
+[根据题目撰写一篇约{word_count}字的范文，标题居中，结构完整：开头引题 → 分论点(2-3个) → 结尾升华，融入时政素材]
+
+---
+
+## 🔍 对比分析
+
+| 维度 | 你的作文 | 范文 | 差距 |
+|------|----------|------|------|
+| 立意角度 | | | |
+| 结构布局 | | | |
+| 论点深度 | | | |
+| 素材运用 | | | |
+| 语言表达 | | | |
+
+## 📝 逐段修改建议
+
+[针对用户作文的各段落，指出问题并给出具体改写示例，格式为：
+**第X段问题**：...
+**建议改为**：...]
+
+## 🎯 提分要点
+
+[列出3-5条最关键的提升方向，按重要性排序]
+
+## 💎 可直接套用的金句
+
+[从范文中提炼3-5句可背诵套用的规范表述]"""
+
+    system = "你是国考申论阅卷名师，既能写出高分范文，又能精准诊断学员作文的差距。批改客观专业，修改建议具体可操作。"
     answer = call_deepseek(prompt, system)
     html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
     return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
