@@ -2080,9 +2080,18 @@ def rebuild_knowledge_base():
     if secret != CRON_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
+    result = _rebuild_kb_from_archives()
+    if not result.get("success"):
+        status = 404 if result.get("error", "").startswith("无新闻归档") else 500
+        return jsonify(result), status
+    return jsonify(result)
+
+
+def _rebuild_kb_from_archives() -> dict:
+    """从新闻归档重建向量库，返回结果字典。供API与启动自检共用。"""
     files = glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md"))
     if not files:
-        return jsonify({"error": "无新闻归档文件", "dir": NEWS_ARCHIVE_DIR}), 404
+        return {"success": False, "error": "无新闻归档文件", "dir": NEWS_ARCHIVE_DIR}
 
     errors = []
     success_count = 0
@@ -2133,14 +2142,14 @@ def rebuild_knowledge_base():
                 errors.append(f"{os.path.basename(filepath)}: {str(e)[:100]}")
 
         total = collection.count()
-        return jsonify({
+        return {
             "success": True,
             "files_processed": success_count,
             "total_chunks": total,
             "errors": errors[:10]
-        })
+        }
     except Exception as e:
-        return jsonify({"error": f"知识库重建失败: {str(e)}", "details": errors[:10]}), 500
+        return {"success": False, "error": f"知识库重建失败: {str(e)}", "details": errors[:10]}
 
 
 @app.route("/api/debug/embedding-test")
@@ -2174,6 +2183,41 @@ def manual_sync_github():
 
 
 # ========== 启动 ==========
+
+def _startup_kb_autocheck():
+    """启动自检：向量库为空且有归档时，自动后台重建。
+    Render等免费平台重新部署会清空文件系统，导致向量库丢失，此处自动恢复。"""
+    def _run():
+        try:
+            client = get_chroma_client()
+            try:
+                count = client.get_collection("shizheng_news").count()
+            except Exception:
+                count = 0
+            if count > 0:
+                print(f"[STARTUP] 知识库已就绪，共 {count} 个文本块，跳过重建")
+                return
+            files = glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md"))
+            if not files:
+                print("[STARTUP] 知识库为空且无归档文件，跳过自动重建")
+                return
+            print(f"[STARTUP] 检测到知识库为空，开始从 {len(files)} 个归档自动重建...")
+            result = _rebuild_kb_from_archives()
+            if result.get("success"):
+                print(f"[STARTUP] 知识库自动重建完成，共 {result.get('total_chunks')} 个文本块")
+            else:
+                print(f"[STARTUP] 知识库自动重建失败: {result.get('error')}")
+        except Exception as e:
+            print(f"[STARTUP] 知识库自检异常: {e}")
+
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+
+
+# 模块加载即触发（兼容 gunicorn，不依赖 __main__）
+_startup_kb_autocheck()
+
+
 if __name__ == "__main__":
     print("=" * 50)
     print("  考公时政知识库系统")
