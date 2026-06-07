@@ -21,6 +21,7 @@ import os
 import re
 import json
 import glob
+import time
 import hashlib
 import fitz  # PyMuPDF
 import requests
@@ -53,10 +54,15 @@ SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-bapmemmmswmycyam
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-97ca5455764543a8b57f63f3f9cacfef")
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
+RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
 
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "zt130035-lang/shizheng-kb")
+
+# 嵌入向量本地缓存（按文本md5），避免重建时重复请求同一段文本
+_EMBED_CACHE = {}
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 
@@ -200,19 +206,82 @@ def git_sync_to_github(message: str = "auto: sync data"):
         return False
 
 def get_embedding(texts: List[str]) -> List[List[float]]:
-    """调用SiliconFlow获取文本向量"""
+    """调用SiliconFlow获取文本向量。带本地缓存(按文本md5)与指数退避重试。"""
+    if not texts:
+        return []
+
+    # 先查缓存，命中的直接复用，未命中的才请求
+    keys = [hashlib.md5(t.encode("utf-8")).hexdigest() for t in texts]
+    cached = {}
+    misses, miss_idx = [], []
+    for i, (t, k) in enumerate(zip(texts, keys)):
+        if k in _EMBED_CACHE:
+            cached[i] = _EMBED_CACHE[k]
+        else:
+            misses.append(t)
+            miss_idx.append(i)
+
+    if misses:
+        fresh = _embedding_request(misses)
+        if not fresh or len(fresh) != len(misses):
+            # 整批失败：若全部都靠这次请求，则返回空；否则放弃保证完整性也返回空
+            return []
+        for local_i, emb in zip(miss_idx, fresh):
+            cached[local_i] = emb
+            _EMBED_CACHE[keys[local_i]] = emb
+
+    return [cached[i] for i in range(len(texts))]
+
+
+def _embedding_request(texts: List[str]) -> List[List[float]]:
+    """实际发起嵌入请求，失败时指数退避重试。"""
     headers = {
         "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {"model": EMBEDDING_MODEL, "input": texts, "encoding_format": "float"}
-    try:
-        resp = requests.post(EMBEDDING_API_URL, headers=headers, json=payload, timeout=30)
-        resp.raise_for_status()
-        return [item["embedding"] for item in resp.json()["data"]]
-    except Exception as e:
-        print(f"[Embedding Error] {e}")
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(EMBEDDING_API_URL, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            return [item["embedding"] for item in resp.json()["data"]]
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(1.5 * (2 ** attempt))  # 1.5s, 3s
+    print(f"[Embedding Error] {last_err}")
+    return []
+
+
+def rerank_documents(query: str, documents: List[str], top_n: int = 5) -> List[dict]:
+    """用SiliconFlow rerank模型对候选文档重排序。
+    返回 [{'index': 原始下标, 'score': 相关性分数}, ...] 按分数降序。
+    失败时返回空列表，调用方应回退到原始向量顺序。"""
+    if not documents:
         return []
+    headers = {
+        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": RERANK_MODEL,
+        "query": query,
+        "documents": documents,
+        "top_n": min(top_n, len(documents)),
+    }
+    for attempt in range(3):
+        try:
+            resp = requests.post(RERANK_API_URL, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            return [{"index": r["index"], "score": round(r.get("relevance_score", 0.0), 4)} for r in results]
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(1.5 * (2 ** attempt))
+            else:
+                print(f"[Rerank Error] {e}")
+    return []
 
 
 def get_chroma_client():
@@ -639,20 +708,38 @@ def query_kb():
     if not embeddings:
         return jsonify({"error": "嵌入API调用失败"}), 500
 
-    results = collection.query(query_embeddings=embeddings, n_results=top_k)
+    # 1. 向量召回更多候选（top_k 的 4 倍，至少20），再用 rerank 精排
+    recall_n = max(top_k * 4, 20)
+    results = collection.query(query_embeddings=embeddings, n_results=recall_n)
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    dists = results["distances"][0]
+
+    # 2. rerank 精排
+    reranked = rerank_documents(question, docs, top_n=top_k)
     items = []
-    for doc, meta, dist in zip(
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0]
-    ):
-        items.append({
-            "content": doc,
-            "title": meta.get("title", ""),
-            "date": meta.get("date", ""),
-            "source": meta.get("source", ""),
-            "score": round(1 - dist, 4)
-        })
+    if reranked:
+        for r in reranked:
+            idx = r["index"]
+            items.append({
+                "content": docs[idx],
+                "title": metas[idx].get("title", ""),
+                "date": metas[idx].get("date", ""),
+                "source": metas[idx].get("source", ""),
+                "score": r["score"],
+                "reranked": True
+            })
+    else:
+        # rerank失败时回退到向量相似度顺序
+        for doc, meta, dist in list(zip(docs, metas, dists))[:top_k]:
+            items.append({
+                "content": doc,
+                "title": meta.get("title", ""),
+                "date": meta.get("date", ""),
+                "source": meta.get("source", ""),
+                "score": round(1 - dist, 4),
+                "reranked": False
+            })
     return jsonify({"question": question, "results": items})
 
 
@@ -1560,7 +1647,7 @@ def query_explain():
 # ========== 申论训练模块 ==========
 
 def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
-    """从知识库检索与文本相关的素材"""
+    """从知识库检索与文本相关的素材（向量召回 + rerank精排）"""
     client = get_chroma_client()
     try:
         collection = client.get_collection("shizheng_news")
@@ -1573,12 +1660,21 @@ def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
     if not embeddings:
         return ""
 
-    results = collection.query(query_embeddings=embeddings, n_results=top_k)
-    if not results["documents"][0]:
+    # 向量召回更多候选再精排，提升素材相关性
+    recall_n = max(top_k * 4, 20)
+    results = collection.query(query_embeddings=embeddings, n_results=recall_n)
+    docs = results["documents"][0]
+    if not docs:
         return ""
 
+    reranked = rerank_documents(query_text, docs, top_n=top_k)
+    if reranked:
+        ordered = [docs[r["index"]] for r in reranked]
+    else:
+        ordered = docs[:top_k]
+
     materials = []
-    for i, doc in enumerate(results["documents"][0]):
+    for i, doc in enumerate(ordered):
         materials.append(f"【素材{i+1}】{doc[:300]}")
     return "\n\n".join(materials)
 
@@ -2094,7 +2190,6 @@ def _rebuild_kb_from_archives() -> dict:
         return {"success": False, "error": "无新闻归档文件", "dir": NEWS_ARCHIVE_DIR}
 
     errors = []
-    success_count = 0
     try:
         client = get_chroma_client()
         # 删除旧的再重建
@@ -2107,6 +2202,8 @@ def _rebuild_kb_from_archives() -> dict:
             metadata={"description": "考公时政新闻知识库"}
         )
 
+        # 1. 先收集所有文本块及元数据
+        all_chunks, all_ids, all_metas = [], [], []
         for filepath in sorted(files):
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -2116,35 +2213,43 @@ def _rebuild_kb_from_archives() -> dict:
                 chunks = chunk_text(content)
                 if not chunks:
                     continue
-                # 逐条嵌入，避免批量过大
                 fname = os.path.basename(filepath).replace(".md", "")
+                date_match = re.match(r'(\d{4}-\d{2}-\d{2})', fname)
+                meta = {
+                    "title": fname,
+                    "date": date_match.group(1) if date_match else "",
+                    "source": "新闻归档"
+                }
                 for j, chunk in enumerate(chunks):
-                    try:
-                        emb = get_embedding([chunk])
-                        if emb:
-                            # 提取元数据
-                            date_match = re.match(r'(\d{4}-\d{2}-\d{2})', fname)
-                            meta = {
-                                "title": fname,
-                                "date": date_match.group(1) if date_match else "",
-                                "source": "新闻归档"
-                            }
-                            collection.add(
-                                documents=[chunk],
-                                embeddings=emb,
-                                ids=[f"{fname}_chunk_{j}"],
-                                metadatas=[meta]
-                            )
-                    except Exception as e:
-                        errors.append(f"{fname}_chunk_{j}: {str(e)[:100]}")
-                success_count += 1
+                    all_chunks.append(chunk)
+                    all_ids.append(f"{fname}_chunk_{j}")
+                    all_metas.append(meta)
             except Exception as e:
                 errors.append(f"{os.path.basename(filepath)}: {str(e)[:100]}")
+
+        files_processed = len(files)
+
+        # 2. 分批嵌入并写入（每批30条）
+        batch_size = 30
+        for i in range(0, len(all_chunks), batch_size):
+            batch_chunks = all_chunks[i:i + batch_size]
+            batch_ids = all_ids[i:i + batch_size]
+            batch_metas = all_metas[i:i + batch_size]
+            embs = get_embedding(batch_chunks)
+            if not embs or len(embs) != len(batch_chunks):
+                errors.append(f"批次 {i}-{i+len(batch_chunks)} 嵌入失败")
+                continue
+            collection.add(
+                documents=batch_chunks,
+                embeddings=embs,
+                ids=batch_ids,
+                metadatas=batch_metas
+            )
 
         total = collection.count()
         return {
             "success": True,
-            "files_processed": success_count,
+            "files_processed": files_processed,
             "total_chunks": total,
             "errors": errors[:10]
         }
