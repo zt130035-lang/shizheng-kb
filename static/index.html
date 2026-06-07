@@ -220,6 +220,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     <a href="#" data-page="archives" class="active"><span class="icon">📰</span><span>新闻归档</span></a>
     <a href="#" data-page="favorites"><span class="icon">⭐</span><span>我的收藏</span></a>
     <a href="#" data-page="reports"><span class="icon">📅</span><span>每日日报</span></a>
+    <a href="#" data-page="topics"><span class="icon">🔥</span><span>时政专题</span></a>
     <a href="#" data-page="quiz"><span class="icon">✏️</span><span>PDF做题</span></a>
     <a href="#" data-page="wrong"><span class="icon">📕</span><span>错题本</span></a>
     <a href="#" data-page="query"><span class="icon">🔍</span><span>知识查询</span></a>
@@ -296,6 +297,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
       <span id="report-date-display" style="font-size:14px;font-weight:600;color:var(--primary)"></span>
     </div>
     <div class="card content-display" id="report-content"></div>
+  </div>
+</div>
+
+<!-- 时政专题 -->
+<div class="page" id="page-topics">
+  <div class="page-header">
+    <h2>🔥 时政专题 <button class="btn btn-sm" onclick="generateTopic()" id="topic-gen-btn">✨ 生成最新专题</button></h2>
+    <div class="desc">把零散新闻聚合成按主题分类的素材包，背时政更高效</div>
+  </div>
+  <div id="topics-list" class="query-cards"></div>
+  <div id="topic-detail" style="display:none;margin-top:20px">
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <button class="btn btn-outline btn-sm" onclick="closeTopicDetail()">← 返回列表</button>
+      <span id="topic-date-display" style="font-size:14px;font-weight:600;color:var(--primary)"></span>
+    </div>
+    <div class="card content-display essay-result" id="topic-content"></div>
   </div>
 </div>
 
@@ -528,7 +545,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     a.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-' + a.dataset.page).classList.add('active');
-    const loaders = {archives:loadArchives, favorites:loadFavorites, reports:loadReports, manage:loadCollections, quiz:loadPDFs, wrong:loadWrongBook, stats:loadStats};
+    const loaders = {archives:loadArchives, favorites:loadFavorites, reports:loadReports, topics:loadTopics, manage:loadCollections, quiz:loadPDFs, wrong:loadWrongBook, stats:loadStats};
     if (loaders[a.dataset.page]) loaders[a.dataset.page]();
     if (window.innerWidth <= 768) toggleMobileMenu();
   });
@@ -695,6 +712,50 @@ async function showReport(fn, label) {
 function closeReportDetail() {
   document.getElementById('calendar-container').style.display = 'block';
   document.getElementById('report-detail').style.display = 'none';
+}
+
+// ===== 时政专题 =====
+async function loadTopics() {
+  const el = document.getElementById('topics-list');
+  el.innerHTML = '<div class="loading">加载中</div>';
+  document.getElementById('topic-detail').style.display = 'none';
+  try {
+    const data = await(await fetch('/api/topics')).json();
+    if (!data.length) {
+      el.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--text2)">暂无专题，点击右上角"生成最新专题"，或先爬取一些新闻</div>';
+      return;
+    }
+    el.innerHTML = data.map(t => `<div class="query-card" onclick="showTopic('${encodeURIComponent(t.filename)}','${t.date}')"><div class="card-header"><span class="card-title">🔥 ${t.date} 时政热点专题</span></div><div class="card-meta">点击查看按主题分类的素材包</div></div>`).join('');
+  } catch(e) {
+    el.innerHTML = `<div class="card" style="color:var(--danger)">加载失败：${e.message}</div>`;
+  }
+}
+async function showTopic(fn, date) {
+  document.getElementById('topics-list').style.display = 'none';
+  document.getElementById('topic-detail').style.display = 'block';
+  document.getElementById('topic-date-display').textContent = date + ' 时政热点专题';
+  document.getElementById('topic-content').innerHTML = '<div class="loading">加载中</div>';
+  const d = await(await fetch('/api/topics/' + fn)).json();
+  document.getElementById('topic-content').innerHTML = d.html || '内容为空';
+}
+function closeTopicDetail() {
+  document.getElementById('topics-list').style.display = 'grid';
+  document.getElementById('topic-detail').style.display = 'none';
+}
+async function generateTopic() {
+  const btn = document.getElementById('topic-gen-btn');
+  btn.disabled = true; btn.textContent = '⏳ 聚合生成中...';
+  try {
+    const res = await fetch('/api/topics/generate', {method:'POST'});
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    await loadTopics();
+    if (data.filename) showTopic(encodeURIComponent(data.filename), data.filename.replace('topics_','').replace('.md',''));
+  } catch(e) {
+    alert('生成失败：' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ 生成最新专题';
+  }
 }
 
 // ===== Knowledge Query (Card Style) =====

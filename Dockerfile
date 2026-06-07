@@ -11,12 +11,13 @@ COPY server.py .
 COPY static/ static/
 
 # Create persistent data directories
-RUN mkdir -p /data/news_archive /data/daily_reports /data/knowledge_db /data/pdf_uploads /data/pdf_questions
+RUN mkdir -p /data/news_archive /data/daily_reports /data/knowledge_db /data/pdf_uploads /data/pdf_questions /data/topics
 
-# Copy existing data (question banks, news, reports)
+# Copy existing data (question banks, news, reports, topics)
 COPY data/pdf_questions/ /data/pdf_questions/
 COPY data/news_archive/ /data/news_archive/
 COPY data/daily_reports/ /data/daily_reports/
+COPY data/topics/ /data/topics/
 
 # Environment variables
 ENV DATA_DIR=/data

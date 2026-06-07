@@ -40,10 +40,11 @@ NEWS_ARCHIVE_DIR = os.path.join(DATA_DIR, "news_archive")
 DAILY_REPORTS_DIR = os.path.join(DATA_DIR, "daily_reports")
 KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "knowledge_db")
 PDF_UPLOADS_DIR = os.path.join(DATA_DIR, "pdf_uploads")
+TOPICS_DIR = os.path.join(DATA_DIR, "topics")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 确保目录存在
-for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR]:
+for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, TOPICS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # 用户数据文件
@@ -92,6 +93,11 @@ def git_sync_to_github(message: str = "auto: sync data"):
     # 日报
     for f in glob.glob(os.path.join(DAILY_REPORTS_DIR, "*.md")):
         rel_path = f"data/daily_reports/{os.path.basename(f)}"
+        sync_files.append((f, rel_path))
+
+    # 时政热点专题
+    for f in glob.glob(os.path.join(TOPICS_DIR, "*.md")):
+        rel_path = f"data/topics/{os.path.basename(f)}"
         sync_files.append((f, rel_path))
 
     # 题库 JSON
@@ -288,6 +294,130 @@ def get_chroma_client():
     return chromadb.PersistentClient(path=KNOWLEDGE_DB_DIR)
 
 
+# ========== 新闻爬取共享管线 ==========
+# 扩充后的时政新闻源（priority 越小越权威，排序靠前）
+NEWS_SOURCES = [
+    ("求是网", "http://www.qstheory.cn/", 1),
+    ("人民网", "http://politics.people.com.cn/", 2),
+    ("新华网", "http://www.xinhuanet.com/politics/", 3),
+    ("半月谈", "http://www.banyuetan.org/", 2),
+    ("光明网时评", "https://guancha.gmw.cn/", 4),
+    ("央视网", "http://news.cctv.com/", 5),
+]
+
+CRAWL_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Accept': 'text/html,application/xhtml+xml',
+    'Accept-Language': 'zh-CN,zh;q=0.9',
+}
+
+
+def fetch_news_from_sources(log_prefix: str = "CRAWL", per_source: int = 15) -> list:
+    """从所有新闻源抓取标题，去重并按权威度排序。
+    返回 [(title, {"source":..., "url":...}), ...]"""
+    from urllib.parse import urljoin
+    from bs4 import BeautifulSoup
+
+    all_news = {}
+    priority = {}
+    for name, base_url, prio in NEWS_SOURCES:
+        priority[name] = prio
+        try:
+            resp = requests.get(base_url, timeout=15, headers=CRAWL_HEADERS, verify=False)
+            if resp.status_code == 200:
+                resp.encoding = 'utf-8'
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                count = 0
+                for a in soup.find_all('a', href=True):
+                    text = a.get_text(strip=True)
+                    href = a['href']
+                    if 15 < len(text) < 100 and re.search(r'[一-鿿]', text):
+                        exclude = ['登录', '注册', '搜索', '首页', '上一页', '下一页', '评论']
+                        if not any(kw in text for kw in exclude):
+                            if href.startswith('//'):
+                                href = 'http:' + href
+                            elif href.startswith('/'):
+                                href = urljoin(base_url, href)
+                            elif not href.startswith('http'):
+                                href = urljoin(base_url, href)
+                            if text not in all_news and count < per_source:
+                                all_news[text] = {"source": name, "url": href}
+                                count += 1
+                print(f"[{log_prefix}] {name}: {count} 条")
+        except Exception as e:
+            print(f"[{log_prefix}] {name} 失败: {e}")
+
+    if not all_news:
+        return []
+    sorted_news = sorted(all_news.items(), key=lambda x: priority.get(x[1]["source"], 99))
+    return sorted_news
+
+
+def build_topic_digest(log_prefix: str = "CRAWL", max_archives: int = 30) -> str:
+    """聚合近期归档新闻，让AI生成「时政热点专题素材包」并落盘。
+    返回生成的专题文件名（失败返回空串）。"""
+    files = sorted(glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md")), reverse=True)[:max_archives]
+    if not files:
+        print(f"[{log_prefix}] 无归档，跳过专题聚合")
+        return ""
+
+    # 汇总归档标题与要点
+    titles = []
+    for fp in files:
+        name = os.path.basename(fp)
+        m = re.match(r'\d{4}-\d{2}-\d{2}_\d+_(.+)\.md', name)
+        if m:
+            titles.append(m.group(1))
+    if not titles:
+        return ""
+
+    titles_text = "\n".join(f"- {t}" for t in titles[:30])
+    prompt = f"""以下是近期时政新闻标题。请你按「考公时政主题」对它们归类，提炼出 3-5 个高频热点专题，每个专题输出一份可直接背诵的素材包。
+
+【近期新闻标题】
+{titles_text}
+
+请按以下 Markdown 格式输出（每个专题一节）：
+
+## 专题：[主题名，如 新质生产力 / 乡村振兴 / 基层治理]
+
+**📖 背景概述**
+[3-4句说清这个主题的来龙去脉和重要性]
+
+**🎯 核心官方表述**
+- [可直接引用的规范表述1]
+- [规范表述2]
+- [规范表述3]
+
+**📌 可用案例**
+- [关联的新闻事件/数据]
+
+**✍️ 申论金句**
+- [适合写进文章的句子1]
+- [句子2]
+
+**🧩 行测考点**
+- [可能的客观题考查角度]
+
+---
+（重复以上结构输出每个专题）"""
+
+    digest = call_deepseek(prompt, "你是公考时政教研专家，擅长把零散新闻归纳成可背诵的主题素材包。表述权威、贴合考点。")
+    if not digest or digest.startswith("AI调用失败"):
+        print(f"[{log_prefix}] 专题聚合失败")
+        return ""
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    fname = f"topics_{today}.md"
+    fpath = os.path.join(TOPICS_DIR, fname)
+    with open(fpath, "w", encoding="utf-8") as f:
+        f.write(f"# 🔥 {today} 时政热点专题\n\n")
+        f.write(f"> 由近 {len(titles)} 条时政新闻智能聚合而成\n\n")
+        f.write(digest)
+    print(f"[{log_prefix}] 专题素材包已生成: {fname}")
+    return fname
+
+
 def call_deepseek(prompt: str, system: str = "") -> str:
     """调用DeepSeek AI"""
     headers = {
@@ -424,57 +554,17 @@ def index():
 @app.route("/api/crawl", methods=["POST"])
 def crawl_news():
     """手动触发一次新闻爬取（内置逻辑，无需外部脚本）"""
-    from urllib.parse import urljoin
-    from bs4 import BeautifulSoup
     import threading
 
     def do_manual_crawl():
         today = datetime.now().strftime("%Y-%m-%d")
         print(f"[CRAWL] 开始手动爬取 {today}")
 
-        headers_req = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
-        }
-        sources = [
-            ("求是网", "http://www.qstheory.cn/"),
-            ("人民网", "http://politics.people.com.cn/"),
-            ("新华网", "http://www.xinhuanet.com/politics/"),
-        ]
-        all_news = {}
-        for name, base_url in sources:
-            try:
-                resp = requests.get(base_url, timeout=15, headers=headers_req, verify=False)
-                if resp.status_code == 200:
-                    resp.encoding = 'utf-8'
-                    soup = BeautifulSoup(resp.text, 'html.parser')
-                    count = 0
-                    for a in soup.find_all('a', href=True):
-                        text = a.get_text(strip=True)
-                        href = a['href']
-                        if 15 < len(text) < 100 and re.search(r'[一-鿿]', text):
-                            exclude = ['登录', '注册', '搜索', '首页', '上一页', '下一页', '评论']
-                            if not any(kw in text for kw in exclude):
-                                if href.startswith('//'):
-                                    href = 'http:' + href
-                                elif href.startswith('/'):
-                                    href = urljoin(base_url, href)
-                                elif not href.startswith('http'):
-                                    href = urljoin(base_url, href)
-                                if text not in all_news and count < 15:
-                                    all_news[text] = {"source": name, "url": href}
-                                    count += 1
-                print(f"[CRAWL] {name}: {count} 条")
-            except Exception as e:
-                print(f"[CRAWL] {name} 失败: {e}")
-
-        if not all_news:
+        sorted_news = fetch_news_from_sources("CRAWL")
+        if not sorted_news:
             print("[CRAWL] 未获取到新闻")
             return
-
-        priority = {"求是网": 1, "人民网": 2, "新华网": 3}
-        sorted_news = sorted(all_news.items(), key=lambda x: priority.get(x[1]["source"], 99))[:15]
+        sorted_news = sorted_news[:15]
 
         # 保存新闻（AI分析）
         saved_files = []
@@ -567,6 +657,12 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
                 print(f"[CRAWL] 知识库已更新，新增{len(saved_files)}篇")
             except Exception as e:
                 print(f"[CRAWL] 知识库嵌入失败: {e}")
+
+        # 生成时政热点专题素材包
+        try:
+            build_topic_digest("CRAWL")
+        except Exception as e:
+            print(f"[CRAWL] 专题聚合失败: {e}")
 
         # 自动同步到GitHub（数据持久化）
         try:
@@ -684,6 +780,47 @@ def get_report(filename):
         content = f.read()
     html = markdown.markdown(content, extensions=["tables", "fenced_code"])
     return jsonify({"filename": filename, "markdown": content, "html": html})
+
+
+# --- 时政热点专题 ---
+@app.route("/api/topics")
+def list_topics():
+    """列出所有时政热点专题，按日期倒序"""
+    files = glob.glob(os.path.join(TOPICS_DIR, "*.md"))
+    topics = []
+    for f in sorted(files, reverse=True):
+        name = os.path.basename(f)
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', name)
+        if match:
+            topics.append({"date": match.group(1), "filename": name})
+    return jsonify(topics)
+
+
+@app.route("/api/topics/<path:filename>")
+def get_topic(filename):
+    """获取单个专题素材包内容"""
+    filepath = os.path.join(TOPICS_DIR, filename)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "文件不存在"}), 404
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+    html = markdown.markdown(content, extensions=["tables", "fenced_code"])
+    return jsonify({"filename": filename, "markdown": content, "html": html})
+
+
+@app.route("/api/topics/generate", methods=["POST", "GET"])
+def generate_topic():
+    """手动触发生成时政热点专题（同步执行，方便立即查看）"""
+    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
+    # 允许前端不带secret调用（与手动爬取一致的开放程度）
+    fname = build_topic_digest("MANUAL")
+    if not fname:
+        return jsonify({"error": "暂无归档新闻可供聚合，请先爬取新闻"}), 400
+    try:
+        git_sync_to_github("auto: 生成专题素材")
+    except Exception:
+        pass
+    return jsonify({"success": True, "filename": fname})
 
 
 # --- 知识库查询 ---
@@ -1979,59 +2116,18 @@ def cron_daily_crawl():
     if secret != CRON_SECRET:
         return jsonify({"error": "unauthorized"}), 401
 
-    from urllib.parse import urljoin
-    from bs4 import BeautifulSoup
     import threading
 
     def do_crawl():
         today = datetime.now().strftime("%Y-%m-%d")
         print(f"[CRON] 开始每日爬取 {today}")
 
-        # 1. 爬取新闻
-        headers_req = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
-        }
-        sources = [
-            ("求是网", "http://www.qstheory.cn/"),
-            ("人民网", "http://politics.people.com.cn/"),
-            ("新华网", "http://www.xinhuanet.com/politics/"),
-        ]
-        all_news = {}
-        for name, base_url in sources:
-            try:
-                resp = requests.get(base_url, timeout=15, headers=headers_req, verify=False)
-                if resp.status_code == 200:
-                    resp.encoding = 'utf-8'
-                    soup = BeautifulSoup(resp.text, 'html.parser')
-                    count = 0
-                    for a in soup.find_all('a', href=True):
-                        text = a.get_text(strip=True)
-                        href = a['href']
-                        if 15 < len(text) < 100 and re.search(r'[一-鿿]', text):
-                            exclude = ['登录', '注册', '搜索', '首页', '上一页', '下一页', '评论']
-                            if not any(kw in text for kw in exclude):
-                                if href.startswith('//'):
-                                    href = 'http:' + href
-                                elif href.startswith('/'):
-                                    href = urljoin(base_url, href)
-                                elif not href.startswith('http'):
-                                    href = urljoin(base_url, href)
-                                if text not in all_news and count < 15:
-                                    all_news[text] = {"source": name, "url": href}
-                                    count += 1
-                print(f"[CRON] {name}: {count} 条")
-            except Exception as e:
-                print(f"[CRON] {name} 失败: {e}")
-
-        if not all_news:
+        # 1. 爬取新闻（共享管线，多源）
+        sorted_news = fetch_news_from_sources("CRON")
+        if not sorted_news:
             print("[CRON] 未获取到新闻")
             return
-
-        # 排序
-        priority = {"求是网": 1, "人民网": 2, "新华网": 3}
-        sorted_news = sorted(all_news.items(), key=lambda x: priority.get(x[1]["source"], 99))[:15]
+        sorted_news = sorted_news[:15]
 
         # 2. 保存新闻全文（AI分析）
         saved_files = []
@@ -2154,6 +2250,12 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
                 print(f"[CRON] Bark推送成功")
             except Exception as e:
                 print(f"[CRON] Bark推送失败: {e}")
+
+        # 5.5 生成时政热点专题素材包
+        try:
+            build_topic_digest("CRON")
+        except Exception as e:
+            print(f"[CRON] 专题聚合失败: {e}")
 
         # 6. 自动同步到GitHub（数据持久化）
         try:
