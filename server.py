@@ -41,10 +41,11 @@ DAILY_REPORTS_DIR = os.path.join(DATA_DIR, "daily_reports")
 KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "knowledge_db")
 PDF_UPLOADS_DIR = os.path.join(DATA_DIR, "pdf_uploads")
 TOPICS_DIR = os.path.join(DATA_DIR, "topics")
+MORNING_CARDS_DIR = os.path.join(DATA_DIR, "morning_cards")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 确保目录存在
-for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, TOPICS_DIR]:
+for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # 用户数据文件
@@ -98,6 +99,11 @@ def git_sync_to_github(message: str = "auto: sync data"):
     # 时政热点专题
     for f in glob.glob(os.path.join(TOPICS_DIR, "*.md")):
         rel_path = f"data/topics/{os.path.basename(f)}"
+        sync_files.append((f, rel_path))
+
+    # 时政晨读卡
+    for f in glob.glob(os.path.join(MORNING_CARDS_DIR, "*.json")):
+        rel_path = f"data/morning_cards/{os.path.basename(f)}"
         sync_files.append((f, rel_path))
 
     # 题库 JSON
@@ -416,6 +422,110 @@ def build_topic_digest(log_prefix: str = "CRAWL", max_archives: int = 30) -> str
         f.write(digest)
     print(f"[{log_prefix}] 专题素材包已生成: {fname}")
     return fname
+
+
+def build_morning_card(log_prefix: str = "CRON") -> dict:
+    """生成「3分钟晨读卡」：当天最该记的3条时政+1句金句+1道自测题。
+    返回结构化 dict（含 markdown 与 bark 推送文本），失败返回 {}。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    # 优先用当天归档，没有则用最近的
+    files = sorted(glob.glob(os.path.join(NEWS_ARCHIVE_DIR, f"{today}_*.md")), reverse=True)
+    if not files:
+        files = sorted(glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md")), reverse=True)[:8]
+    if not files:
+        print(f"[{log_prefix}] 无归档，跳过晨读卡")
+        return {}
+
+    # 汇总素材（标题+正文片段）
+    materials = []
+    for fp in files[:8]:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                materials.append(f.read()[:600])
+        except Exception:
+            continue
+    material_text = "\n\n---\n\n".join(materials)
+
+    prompt = f"""下面是今天的时政新闻素材。请你为备考公务员的考生制作一张「3分钟晨读卡」，内容要精炼、好记、适合通勤路上速览。
+
+【今日时政素材】
+{material_text}
+
+请严格输出 JSON（不要任何额外文字、不要代码块包裹）：
+{{
+  "points": [
+    {{"title": "最该记的时政点1（15字内）", "detail": "一句话核心内容（40字内，含关键数据/表述）"}},
+    {{"title": "时政点2", "detail": "..."}},
+    {{"title": "时政点3", "detail": "..."}}
+  ],
+  "golden_sentence": "1句可直接用于申论的规范金句（30-50字）",
+  "quiz": {{
+    "question": "1道与今日时政相关的单选题题干",
+    "options": {{"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"}},
+    "answer": "正确选项字母",
+    "explain": "一句话解析"
+  }}
+}}"""
+    raw = call_deepseek(prompt, "你是公考时政辅导专家，擅长把时政浓缩成易记的晨读卡。表述权威精炼。只输出合法JSON。")
+    card = _parse_json_loose(raw)
+    if not card or "points" not in card:
+        print(f"[{log_prefix}] 晨读卡生成失败")
+        return {}
+
+    # 强制精简到3条，保证"3分钟"可读性
+    card["points"] = card.get("points", [])[:3]
+    card["date"] = today
+
+    # 组织 markdown（前端展示用）
+    md_lines = [f"# ☀️ {today} 时政晨读卡\n"]
+    md_lines.append("## 📌 今日必记")
+    for i, p in enumerate(card.get("points", []), 1):
+        md_lines.append(f"{i}. **{p.get('title','')}** — {p.get('detail','')}")
+    md_lines.append(f"\n## 💎 今日金句\n> {card.get('golden_sentence','')}")
+    quiz = card.get("quiz", {})
+    if quiz:
+        md_lines.append("\n## ❓ 今日自测")
+        md_lines.append(f"{quiz.get('question','')}\n")
+        for k in ["A", "B", "C", "D"]:
+            if k in quiz.get("options", {}):
+                md_lines.append(f"- {k}. {quiz['options'][k]}")
+        md_lines.append(f"\n<details><summary>查看答案</summary>\n\n**答案：{quiz.get('answer','')}** — {quiz.get('explain','')}\n\n</details>")
+    card["markdown"] = "\n".join(md_lines)
+
+    # 组织 Bark 推送文本（纯文本、精简）
+    bark_lines = ["📌 今日必记"]
+    for i, p in enumerate(card.get("points", []), 1):
+        bark_lines.append(f"{i}. {p.get('title','')}：{p.get('detail','')}")
+    bark_lines.append(f"\n💎 金句：{card.get('golden_sentence','')}")
+    if quiz:
+        opts = " ".join(f"{k}.{v}" for k, v in quiz.get("options", {}).items())
+        bark_lines.append(f"\n❓ 自测：{quiz.get('question','')}\n{opts}\n（答案见App）")
+    card["bark_body"] = "\n".join(bark_lines)
+
+    # 落盘 JSON
+    fpath = os.path.join(MORNING_CARDS_DIR, f"card_{today}.json")
+    with open(fpath, "w", encoding="utf-8") as f:
+        json.dump(card, f, ensure_ascii=False, indent=2)
+    print(f"[{log_prefix}] 晨读卡已生成: card_{today}.json")
+    return card
+
+
+def send_bark(title: str, body: str, group: str = "考公时政") -> bool:
+    """发送 Bark 推送，成功返回True"""
+    bark_key = os.environ.get("BARK_DEVICE_KEY", "CvCwzTHBHUNpm8znAvxsSB")
+    if not bark_key:
+        return False
+    try:
+        requests.post(f"https://api.day.app/{bark_key}", json={
+            "title": title,
+            "body": body[:3500],
+            "group": group,
+        }, timeout=10)
+        return True
+    except Exception as e:
+        print(f"[BARK] 推送失败: {e}")
+        return False
+
 
 
 def call_deepseek(prompt: str, system: str = "") -> str:
@@ -821,6 +931,49 @@ def generate_topic():
     except Exception:
         pass
     return jsonify({"success": True, "filename": fname})
+
+
+# --- 时政晨读卡 ---
+@app.route("/api/morning-cards")
+def list_morning_cards():
+    """列出所有晨读卡，按日期倒序"""
+    files = glob.glob(os.path.join(MORNING_CARDS_DIR, "*.json"))
+    cards = []
+    for f in sorted(files, reverse=True):
+        name = os.path.basename(f)
+        m = re.search(r'(\d{4}-\d{2}-\d{2})', name)
+        if m:
+            cards.append({"date": m.group(1), "filename": name})
+    return jsonify(cards)
+
+
+@app.route("/api/morning-cards/<path:filename>")
+def get_morning_card(filename):
+    """获取单张晨读卡（结构化数据 + html）"""
+    filepath = os.path.join(MORNING_CARDS_DIR, filename)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "文件不存在"}), 404
+    with open(filepath, "r", encoding="utf-8") as f:
+        card = json.load(f)
+    card["html"] = markdown.markdown(card.get("markdown", ""), extensions=["tables", "fenced_code"])
+    return jsonify(card)
+
+
+@app.route("/api/morning-cards/generate", methods=["POST", "GET"])
+def generate_morning_card():
+    """手动触发生成今日晨读卡"""
+    card = build_morning_card("MANUAL")
+    if not card:
+        return jsonify({"error": "暂无归档新闻，请先爬取新闻"}), 400
+    # 可选：手动生成也推送一次
+    if request.args.get("push") == "1":
+        send_bark(f"☀️ 时政晨读 {card['date']}", card.get("bark_body", ""), "时政晨读")
+    try:
+        git_sync_to_github("auto: 生成晨读卡")
+    except Exception:
+        pass
+    card["html"] = markdown.markdown(card.get("markdown", ""), extensions=["tables", "fenced_code"])
+    return jsonify({"success": True, "card": card})
 
 
 # --- 知识库查询 ---
@@ -2235,21 +2388,17 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
             except Exception as e:
                 print(f"[CRON] 知识库嵌入失败: {e}")
 
-        # 5. Bark推送到手机
-        bark_key = os.environ.get("BARK_DEVICE_KEY", "CvCwzTHBHUNpm8znAvxsSB")
-        if bark_key:
-            try:
-                bark_url = f"https://api.day.app/{bark_key}"
-                bark_body = report[:3500] if len(report) > 3500 else report
-                bark_payload = {
-                    "title": f"📰 时政日报 {today}",
-                    "body": bark_body,
-                    "group": "时政日报",
-                }
-                requests.post(bark_url, json=bark_payload, timeout=10)
-                print(f"[CRON] Bark推送成功")
-            except Exception as e:
-                print(f"[CRON] Bark推送失败: {e}")
+        # 5. 生成晨读卡 + Bark推送到手机
+        try:
+            card = build_morning_card("CRON")
+            if card:
+                send_bark(f"☀️ 时政晨读 {today}", card.get("bark_body", ""), "时政晨读")
+                print(f"[CRON] 晨读卡已推送")
+            else:
+                # 兜底：晨读卡失败时仍推日报摘要
+                send_bark(f"📰 时政日报 {today}", report[:3500], "时政日报")
+        except Exception as e:
+            print(f"[CRON] 晨读卡/推送失败: {e}")
 
         # 5.5 生成时政热点专题素材包
         try:

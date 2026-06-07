@@ -100,6 +100,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .essay-result ul, .essay-result ol { padding-left: 20px; margin: 8px 0; }
 .essay-result li { margin-bottom: 4px; }
 .essay-kb-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; background: var(--success-bg); color: var(--success); border-radius: 20px; font-size: 11px; font-weight: 500; margin-bottom: 12px; }
+.mc-opt { padding: 10px 14px; margin-bottom: 8px; border: 1.5px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; transition: var(--transition); }
+.mc-opt:hover { border-color: var(--primary); background: var(--primary-bg); }
+.mc-opt.correct { border-color: var(--success); background: var(--success-bg); color: var(--success); font-weight: 600; }
+.mc-opt.wrong { border-color: var(--danger); background: var(--danger-bg, #fee); color: var(--danger); }
 
 /* ===== News Archive ===== */
 .date-group { margin-bottom: 24px; }
@@ -221,6 +225,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     <a href="#" data-page="favorites"><span class="icon">⭐</span><span>我的收藏</span></a>
     <a href="#" data-page="reports"><span class="icon">📅</span><span>每日日报</span></a>
     <a href="#" data-page="topics"><span class="icon">🔥</span><span>时政专题</span></a>
+    <a href="#" data-page="morning"><span class="icon">☀️</span><span>晨读卡</span></a>
     <a href="#" data-page="quiz"><span class="icon">✏️</span><span>PDF做题</span></a>
     <a href="#" data-page="wrong"><span class="icon">📕</span><span>错题本</span></a>
     <a href="#" data-page="query"><span class="icon">🔍</span><span>知识查询</span></a>
@@ -314,6 +319,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
     </div>
     <div class="card content-display essay-result" id="topic-content"></div>
   </div>
+</div>
+
+<!-- 晨读卡 -->
+<div class="page" id="page-morning">
+  <div class="page-header">
+    <h2>☀️ 时政晨读卡 <button class="btn btn-sm" onclick="generateMorningCard()" id="card-gen-btn">✨ 生成今日</button></h2>
+    <div class="desc">3分钟速览：3条必记时政 + 1句金句 + 1道自测题，通勤路上看完即可</div>
+  </div>
+  <div id="morning-latest"></div>
+  <div id="morning-history" style="margin-top:24px"></div>
 </div>
 
 <!-- PDF做题 -->
@@ -545,7 +560,7 @@ document.querySelectorAll('.sidebar nav a').forEach(a => {
     a.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-' + a.dataset.page).classList.add('active');
-    const loaders = {archives:loadArchives, favorites:loadFavorites, reports:loadReports, topics:loadTopics, manage:loadCollections, quiz:loadPDFs, wrong:loadWrongBook, stats:loadStats};
+    const loaders = {archives:loadArchives, favorites:loadFavorites, reports:loadReports, topics:loadTopics, morning:loadMorningCards, manage:loadCollections, quiz:loadPDFs, wrong:loadWrongBook, stats:loadStats};
     if (loaders[a.dataset.page]) loaders[a.dataset.page]();
     if (window.innerWidth <= 768) toggleMobileMenu();
   });
@@ -755,6 +770,86 @@ async function generateTopic() {
     alert('生成失败：' + e.message);
   } finally {
     btn.disabled = false; btn.textContent = '✨ 生成最新专题';
+  }
+}
+
+// ===== 时政晨读卡 =====
+async function loadMorningCards() {
+  const latest = document.getElementById('morning-latest');
+  const hist = document.getElementById('morning-history');
+  latest.innerHTML = '<div class="loading">加载中</div>';
+  hist.innerHTML = '';
+  try {
+    const list = await(await fetch('/api/morning-cards')).json();
+    if (!list.length) {
+      latest.innerHTML = '<div class="card" style="text-align:center;padding:40px;color:var(--text2)">暂无晨读卡，点击右上角"生成今日"，或等明早自动推送</div>';
+      return;
+    }
+    const card = await(await fetch('/api/morning-cards/' + encodeURIComponent(list[0].filename))).json();
+    latest.innerHTML = renderMorningCard(card);
+    if (list.length > 1) {
+      hist.innerHTML = '<h3 style="font-size:14px;color:var(--text2);margin-bottom:10px">📚 往期晨读</h3>' +
+        '<div class="query-cards">' + list.slice(1).map(c =>
+          `<div class="query-card" onclick="showMorningCard('${encodeURIComponent(c.filename)}')"><div class="card-header"><span class="card-title">☀️ ${c.date}</span></div></div>`
+        ).join('') + '</div>';
+    }
+  } catch(e) {
+    latest.innerHTML = `<div class="card" style="color:var(--danger)">加载失败：${e.message}</div>`;
+  }
+}
+function renderMorningCard(card) {
+  const pts = (card.points || []).map((p, i) =>
+    `<div style="display:flex;gap:10px;margin-bottom:12px"><span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">${i+1}</span><div><div style="font-weight:600;margin-bottom:2px">${p.title||''}</div><div style="font-size:13px;color:var(--text2);line-height:1.6">${p.detail||''}</div></div></div>`
+  ).join('');
+  const q = card.quiz || {};
+  const opts = ['A','B','C','D'].filter(k => q.options && q.options[k]).map(k =>
+    `<div class="mc-opt" data-k="${k}" onclick="pickMorningOpt(this,'${q.answer}')">${k}. ${q.options[k]}</div>`
+  ).join('');
+  return `<div class="card">
+    <div style="font-size:18px;font-weight:700;margin-bottom:16px">☀️ ${card.date} 时政晨读卡</div>
+    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:10px">📌 今日必记</div>
+    ${pts}
+    <div style="margin:16px 0;padding:14px;background:var(--primary-bg);border-radius:var(--radius-sm);border-left:3px solid var(--primary)">
+      <div style="font-size:12px;color:var(--primary);font-weight:600;margin-bottom:4px">💎 今日金句</div>
+      <div style="font-size:14px;line-height:1.7">${card.golden_sentence||''}</div>
+    </div>
+    ${q.question ? `<div style="margin-top:16px">
+      <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:8px">❓ 今日自测</div>
+      <div style="margin-bottom:10px;line-height:1.6">${q.question}</div>
+      <div class="mc-opts">${opts}</div>
+      <div class="mc-explain" style="display:none;margin-top:10px;padding:10px;background:var(--success-bg);border-radius:var(--radius-sm);font-size:13px"><b>答案：${q.answer}</b> — ${q.explain||''}</div>
+    </div>` : ''}
+  </div>`;
+}
+function pickMorningOpt(el, answer) {
+  const wrap = el.closest('.mc-opts');
+  if (wrap.dataset.done) return;
+  wrap.dataset.done = '1';
+  wrap.querySelectorAll('.mc-opt').forEach(o => {
+    if (o.dataset.k === answer) o.classList.add('correct');
+    else if (o === el) o.classList.add('wrong');
+    o.style.pointerEvents = 'none';
+  });
+  const exp = el.closest('.card').querySelector('.mc-explain');
+  if (exp) exp.style.display = 'block';
+}
+async function showMorningCard(fn) {
+  document.getElementById('page-morning').scrollIntoView({behavior:'smooth'});
+  const card = await(await fetch('/api/morning-cards/' + fn)).json();
+  document.getElementById('morning-latest').innerHTML = renderMorningCard(card);
+}
+async function generateMorningCard() {
+  const btn = document.getElementById('card-gen-btn');
+  btn.disabled = true; btn.textContent = '⏳ 生成中...';
+  try {
+    const res = await fetch('/api/morning-cards/generate', {method:'POST'});
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    await loadMorningCards();
+  } catch(e) {
+    alert('生成失败：' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ 生成今日';
   }
 }
 
