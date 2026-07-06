@@ -12,7 +12,7 @@ services:
       - key: DEEPSEEK_API_KEY
         sync: false
       - key: VISION_MODEL
-        value: "Qwen/Qwen2.5-VL-72B-Instruct"
+        value: "Qwen/Qwen3-VL-8B-Instruct"
       - key: VISION_API_URL
         value: "https://api.siliconflow.cn/v1/chat/completions"
       - key: FLASK_DEBUG

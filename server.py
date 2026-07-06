@@ -59,7 +59,7 @@ EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
-VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct")
+VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
 
 # GitHub 自动同步配置
