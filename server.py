@@ -999,7 +999,12 @@ def query_kb():
 
     embeddings = get_embedding([question])
     if not embeddings:
-        return jsonify({"error": "嵌入API调用失败"}), 500
+        # 线上嵌入服务偶发失败时，不让小程序弹 500；返回空检索结果，其他功能仍可正常使用。
+        return jsonify({
+            "question": question,
+            "results": [],
+            "warning": "知识库检索暂时不可用，已跳过向量检索"
+        })
 
     # 1. 向量召回更多候选（top_k 的 4 倍，至少20），再用 rerank 精排
     recall_n = max(top_k * 4, 20)
