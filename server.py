@@ -54,6 +54,7 @@ USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
 
 # ========== API 配置 ==========
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-bapmemmmswmycyamlywctomymaievhzmlyznvenqosetlgxa")
+VISION_API_KEY = os.environ.get("VISION_API_KEY", SILICONFLOW_API_KEY)
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-97ca5455764543a8b57f63f3f9cacfef")
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
@@ -2308,7 +2309,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
 """
 
     headers = {
-        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+        "Authorization": f"Bearer {VISION_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
