@@ -40,12 +40,13 @@ NEWS_ARCHIVE_DIR = os.path.join(DATA_DIR, "news_archive")
 DAILY_REPORTS_DIR = os.path.join(DATA_DIR, "daily_reports")
 KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "knowledge_db")
 PDF_UPLOADS_DIR = os.path.join(DATA_DIR, "pdf_uploads")
+IMAGE_UPLOADS_DIR = os.path.join(DATA_DIR, "essay_images")
 TOPICS_DIR = os.path.join(DATA_DIR, "topics")
 MORNING_CARDS_DIR = os.path.join(DATA_DIR, "morning_cards")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # 确保目录存在
-for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR]:
+for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # 用户数据文件
@@ -58,6 +59,8 @@ EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
+VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct")
+VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
 
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -2257,6 +2260,112 @@ def essay_compare():
     html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
     return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
 
+
+
+# --- 图片申论批改 ---
+def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "review") -> dict:
+    """识别申论图片文字，并生成批改/润色结果。"""
+    import base64
+    ext = os.path.splitext(image_path)[1].lower()
+    mime = "image/jpeg"
+    if ext == ".png":
+        mime = "image/png"
+    elif ext == ".webp":
+        mime = "image/webp"
+
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    topic_line = f"\n申论题目：{topic}" if topic else ""
+    task_name = "批改并润色" if mode == "review" else "润色优化"
+    prompt = f"""请先准确识别图片中的中文申论作文文字，再对其进行{task_name}。{topic_line}
+
+要求：
+1. 先输出【识别原文】，尽量保持原段落结构；看不清的字用“□”标记。
+2. 按公务员考试申论标准评价：立意、结构、论证、语言、素材、规范性。
+3. 指出原文具体问题，不要只说空话。
+4. 给出一版可直接背诵/参考的【润色后文章】。
+5. 最后总结 3-5 条提升建议。
+
+请严格按以下格式输出：
+
+## 识别原文
+[从图片识别出的文字]
+
+## 批改意见
+[分点说明]
+
+## 润色后文章
+[完整润色稿]
+
+## 提升建议
+[3-5条]
+"""
+
+    headers = {
+        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是资深公务员考试申论阅卷专家，同时擅长从作文照片中识别中文文字。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                ]
+            }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 4096
+    }
+
+    resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    answer = resp.json()["choices"][0]["message"]["content"]
+
+    extracted = ""
+    m = re.search(r"##\s*识别原文\s*\n([\s\S]*?)(?=\n##\s*批改意见|\n##\s*润色后文章|$)", answer)
+    if m:
+        extracted = m.group(1).strip()
+
+    return {
+        "answer": answer,
+        "html": markdown.markdown(answer, extensions=["tables", "fenced_code"]),
+        "extracted_text": extracted,
+        "model": VISION_MODEL
+    }
+
+
+@app.route("/api/essay/image-review", methods=["POST"])
+def essay_image_review():
+    """上传申论作文图片，OCR识别后批改/润色。"""
+    if "file" not in request.files:
+        return jsonify({"error": "未选择图片"}), 400
+
+    file = request.files["file"]
+    fname = file.filename or "essay.jpg"
+    if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return jsonify({"error": "仅支持 JPG、PNG、WEBP 图片"}), 400
+
+    topic = request.form.get("topic", "").strip()
+    mode = request.form.get("mode", "review").strip() or "review"
+    safe = fname.replace("/", "_").replace("\\", "_")
+    filename = f"essay_img_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe}"
+    filepath = os.path.join(IMAGE_UPLOADS_DIR, filename)
+    file.save(filepath)
+
+    try:
+        result = _call_vision_essay_review(filepath, topic=topic, mode=mode)
+        result["filename"] = filename
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": f"图片识别/申论批改失败: {e}", "filename": filename}), 500
 
 # ========== 定时爬取接口 ==========
 CRON_SECRET = os.environ.get("CRON_SECRET", "shizheng2026")

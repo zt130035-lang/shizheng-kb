@@ -11,7 +11,7 @@ COPY server.py .
 COPY static/ static/
 
 # Create persistent data directories
-RUN mkdir -p /data/news_archive /data/daily_reports /data/knowledge_db /data/pdf_uploads /data/pdf_questions /data/topics /data/morning_cards
+RUN mkdir -p /data/news_archive /data/daily_reports /data/knowledge_db /data/pdf_uploads /data/pdf_questions /data/topics /data/morning_cards /data/essay_images
 
 # Copy existing data (question banks, news, reports, topics, morning cards)
 COPY data/pdf_questions/ /data/pdf_questions/
@@ -29,4 +29,4 @@ ENV FLASK_DEBUG=0
 EXPOSE 7860
 
 # Start with gunicorn
-CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:7860", "--timeout", "120", "--workers", "2"]
+CMD ["gunicorn", "server:app", "--bind", "0.0.0.0:7860", "--timeout", "240", "--workers", "2"]
