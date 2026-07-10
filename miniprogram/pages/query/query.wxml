@@ -16,8 +16,6 @@
       <button class="mode-option {{reviewMode=='fast'?'active':''}}" data-mode="fast" bindtap="setReviewMode" disabled="{{reviewing}}">快速批改</button>
       <button class="mode-option {{reviewMode=='deep'?'active':''}}" data-mode="deep" bindtap="setReviewMode" disabled="{{reviewing}}">深度批改</button>
     </view>
-    <view class="mode-hint">{{reviewMode=='fast'?'约15秒完成，适合快速查看主要问题':'耗时更长，会进行知识库检索和二次复核，适合重点文章'}}</view>
-
     <view class="upload-actions">
       <button class="btn upload-btn {{reviewing?'disabled':''}}" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="camera">{{reviewing?'识别中':'拍照上传'}}</button>
       <button class="btn secondary upload-btn {{reviewing?'disabled':''}}" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">{{reviewing?'请稍候':'相册选择'}}</button>
