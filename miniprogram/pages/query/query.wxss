@@ -6,7 +6,6 @@
 .mode-option::after{border:0}
 .mode-option.active{border-color:#1f4d3a;background:#1f4d3a;color:#fffdf7}
 .mode-option[disabled]{opacity:.55}
-.mode-hint{margin-top:10rpx;color:#8b8173;font-size:22rpx;line-height:1.5}
 .upload-actions{display:flex;align-items:stretch;gap:16rpx;flex-wrap:wrap;margin-top:18rpx}
 .upload-btn{flex:1 1 260rpx;min-width:0}
 .btn.disabled,.btn[disabled]{opacity:.55;background:#9aa89f!important;color:#fffdf7!important}
