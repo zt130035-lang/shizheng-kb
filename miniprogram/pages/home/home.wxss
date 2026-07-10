@@ -1,0 +1,8 @@
+.feature-card{min-height:150rpx}
+.feature-icon{font-size:42rpx;margin-bottom:12rpx}
+.step{display:flex;gap:18rpx;padding:14rpx 0}
+.step-index{width:42rpx;height:42rpx;border-radius:50%;background:#1f4d3a;color:#fffdf7;display:flex;align-items:center;justify-content:center;font-size:24rpx;font-weight:800;flex:0 0 42rpx}
+.step-title{font-size:28rpx;font-weight:800;color:#1d2c25}
+.step-desc{margin-top:6rpx;color:#8b8173;font-size:24rpx;line-height:1.55}
+.action-panel{display:flex;gap:18rpx;flex-wrap:wrap}
+.action-panel .btn{flex:1 1 260rpx}

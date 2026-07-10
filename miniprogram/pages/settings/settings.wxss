@@ -1,0 +1,1 @@
+.settings-actions{display:flex;gap:16rpx;flex-wrap:wrap}.settings-btn{flex:1 1 240rpx}.status-line{margin-top:18rpx;padding:16rpx 18rpx;border-radius:18rpx;background:#f7f3e8;color:#334139;font-size:25rpx;line-height:1.55;word-break:break-all}

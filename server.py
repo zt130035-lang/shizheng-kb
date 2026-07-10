@@ -44,6 +44,9 @@ IMAGE_UPLOADS_DIR = os.path.join(DATA_DIR, "essay_images")
 TOPICS_DIR = os.path.join(DATA_DIR, "topics")
 MORNING_CARDS_DIR = os.path.join(DATA_DIR, "morning_cards")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+ESSAY_VAULT_DIR = os.path.join(BASE_DIR, "essay_vault")
+ESSAY_MATERIALS_COLLECTION = "essay_materials"
+ESSAY_KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "essay_knowledge_db")
 
 # 确保目录存在
 for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR]:
@@ -303,6 +306,12 @@ def rerank_documents(query: str, documents: List[str], top_n: int = 5) -> List[d
 
 def get_chroma_client():
     return chromadb.PersistentClient(path=KNOWLEDGE_DB_DIR)
+
+
+def get_essay_chroma_client():
+    """Use a separate store so rebuilding essay materials cannot damage the legacy KB."""
+    os.makedirs(ESSAY_KNOWLEDGE_DB_DIR, exist_ok=True)
+    return chromadb.PersistentClient(path=ESSAY_KNOWLEDGE_DB_DIR)
 
 
 # ========== 新闻爬取共享管线 ==========
@@ -568,6 +577,187 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str
             chunks.append(chunk)
         start += chunk_size - overlap
     return chunks
+
+
+def _parse_note_frontmatter(content: str) -> dict:
+    """Read simple Obsidian frontmatter without adding a YAML dependency."""
+    match = re.match(r"^\ufeff?---\s*\n([\s\S]*?)\n---\s*", content)
+    if not match:
+        return {}
+    result = {}
+    for line in match.group(1).splitlines():
+        item = re.match(r"^([A-Za-z_][\w-]*):\s*(.*?)\s*$", line)
+        if item:
+            result[item.group(1)] = item.group(2).strip().strip("'\"")
+    return result
+
+
+def _essay_source_files() -> list:
+    """Return high-value essay sources; news archives remain the fallback source."""
+    files = []
+    for directory in [TOPICS_DIR, DAILY_REPORTS_DIR]:
+        files.extend(glob.glob(os.path.join(directory, "*.md")))
+
+    # Read only curated Obsidian folders so the linked raw data is not indexed twice.
+    for subdir in ["评分标准", "批改风格", "批改案例", "素材", "问题标签"]:
+        files.extend(glob.glob(os.path.join(ESSAY_VAULT_DIR, subdir, "*.md")))
+    return sorted(set(files))
+
+
+def _essay_source_kind(filepath: str) -> str:
+    normalized = os.path.normcase(filepath)
+    if normalized.startswith(os.path.normcase(TOPICS_DIR)):
+        return "topic"
+    if normalized.startswith(os.path.normcase(DAILY_REPORTS_DIR)):
+        return "daily_report"
+    return "obsidian"
+
+
+def _essay_section_kind(title: str) -> str:
+    if any(word in title for word in ("评分", "规则", "总则", "风格")):
+        return "rubric"
+    if any(word in title for word in ("金句", "规范", "表述", "语言")):
+        return "expression"
+    if any(word in title for word in ("案例", "事例", "实践")):
+        return "case"
+    if any(word in title for word in ("问题", "原因", "影响", "背景")):
+        return "analysis"
+    if any(word in title for word in ("对策", "措施", "路径", "建议")):
+        return "solution"
+    return "material"
+
+
+def _essay_section_chunks(content: str) -> list:
+    """Split Markdown by headings while retaining section context."""
+    lines = content.splitlines()
+    sections = []
+    current_title = "正文"
+    current_lines = []
+    for line in lines:
+        heading = re.match(r"^\s{0,3}#{1,3}\s+(.+?)\s*$", line)
+        if heading:
+            if current_lines and "\n".join(current_lines).strip():
+                sections.append((current_title, "\n".join(current_lines).strip()))
+            current_title = heading.group(1).strip()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+    if current_lines and "\n".join(current_lines).strip():
+        sections.append((current_title, "\n".join(current_lines).strip()))
+
+    if not sections:
+        sections = [("正文", content.strip())]
+
+    result = []
+    for section_index, (title, body) in enumerate(sections):
+        for chunk_index, chunk in enumerate(chunk_text(body, chunk_size=700, overlap=120)):
+            result.append({
+                "section": title,
+                "section_kind": _essay_section_kind(title),
+                "section_index": section_index,
+                "chunk_index": chunk_index,
+                "text": chunk,
+            })
+    return result
+
+
+def _load_essay_guidance(max_chars: int = 7000) -> str:
+    """Load reviewed Obsidian rules and style as fixed essay-review guidance."""
+    paths = []
+    for directory in [os.path.join(ESSAY_VAULT_DIR, "评分标准"), os.path.join(ESSAY_VAULT_DIR, "批改风格")]:
+        paths.extend(sorted(glob.glob(os.path.join(directory, "*.md"))))
+
+    parts = []
+    for filepath in paths:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            metadata = _parse_note_frontmatter(content)
+            if metadata.get("status", "draft").lower() not in {"reviewed", "published"}:
+                continue
+            title = os.path.splitext(os.path.basename(filepath))[0]
+            parts.append(f"【申论规则：{title}】\n{content}")
+        except Exception:
+            continue
+    return "\n\n".join(parts)[:max_chars]
+
+
+def _rebuild_essay_materials() -> dict:
+    """Rebuild the essay-specific vector collection from source and Obsidian notes."""
+    files = _essay_source_files()
+    if not files:
+        return {"success": False, "error": "没有找到申论素材文件"}
+
+    errors = []
+    records = []
+    for filepath in files:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            metadata = _parse_note_frontmatter(content)
+            if _essay_source_kind(filepath) == "obsidian" and metadata.get("status", "draft").lower() not in {"reviewed", "published"}:
+                continue
+            title = os.path.splitext(os.path.basename(filepath))[0]
+            date_match = re.search(r"(20\d{2}-\d{2}-\d{2})", title)
+            for part in _essay_section_chunks(content):
+                record_id = hashlib.md5(
+                    f"{filepath}|{part['section_index']}|{part['chunk_index']}".encode("utf-8")
+                ).hexdigest()
+                records.append({
+                    "id": f"essay_{record_id}",
+                    "text": part["text"],
+                    "metadata": {
+                        "title": title,
+                        "date": date_match.group(1) if date_match else metadata.get("date", ""),
+                        "source": _essay_source_kind(filepath),
+                        "section": part["section"],
+                        "section_kind": part["section_kind"],
+                        "status": metadata.get("status", "source"),
+                        "path": os.path.relpath(filepath, BASE_DIR),
+                    },
+                })
+        except Exception as e:
+            errors.append(f"{os.path.basename(filepath)}: {str(e)[:120]}")
+
+    if not records:
+        return {"success": False, "error": "没有找到可发布的申论素材", "files_processed": len(files)}
+
+    try:
+        client = get_essay_chroma_client()
+        try:
+            client.delete_collection(ESSAY_MATERIALS_COLLECTION)
+        except Exception:
+            pass
+        collection = client.get_or_create_collection(
+            name=ESSAY_MATERIALS_COLLECTION,
+            metadata={"description": "申论专题素材、评分规则、批改案例和表达风格"},
+        )
+
+        batch_size = 30
+        for start in range(0, len(records), batch_size):
+            batch = records[start:start + batch_size]
+            texts = [item["text"] for item in batch]
+            embeddings = get_embedding(texts)
+            if not embeddings or len(embeddings) != len(batch):
+                errors.append(f"批次 {start}-{start + len(batch)} 嵌入失败")
+                continue
+            collection.add(
+                ids=[item["id"] for item in batch],
+                documents=texts,
+                embeddings=embeddings,
+                metadatas=[item["metadata"] for item in batch],
+            )
+
+        return {
+            "success": True,
+            "collection": ESSAY_MATERIALS_COLLECTION,
+            "files_processed": len(files),
+            "records": len(records),
+            "total_chunks": collection.count(),
+            "errors": errors[:10],
+        }
+    except Exception as e:
+        return {"success": False, "error": f"申论向量库重建失败: {e}", "details": errors[:10]}
 
 
 def extract_pdf_text(filepath: str) -> str:
@@ -1946,7 +2136,7 @@ def query_explain():
 
 # ========== 申论训练模块 ==========
 
-def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
+def _search_news_kb_for_essay(text: str, top_k: int = 5) -> str:
     """从知识库检索与文本相关的素材（向量召回 + rerank精排）"""
     client = get_chroma_client()
     try:
@@ -1977,6 +2167,65 @@ def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
     for i, doc in enumerate(ordered):
         materials.append(f"【素材{i+1}】{doc[:300]}")
     return "\n\n".join(materials)
+
+
+def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
+    """Search essay materials first, then fall back to the original news collection."""
+    query_text = text[:600] if len(text) > 600 else text
+    embeddings = get_embedding([query_text])
+    guidance = _load_essay_guidance()
+    if not embeddings:
+        return guidance
+
+    candidates = []
+    clients = []
+    try:
+        clients.append((get_essay_chroma_client(), ESSAY_MATERIALS_COLLECTION))
+    except Exception as e:
+        print(f"[ESSAY-KB] essay collection unavailable: {e}")
+    try:
+        clients.append((get_chroma_client(), "shizheng_news"))
+    except Exception as e:
+        print(f"[ESSAY-KB] legacy collection unavailable: {e}")
+
+    for client, collection_name in clients:
+        try:
+            collection = client.get_collection(collection_name)
+            count = collection.count()
+            if not count:
+                continue
+            recall_n = min(max(top_k * 4, 20), count)
+            result = collection.query(query_embeddings=embeddings, n_results=recall_n)
+            docs = (result.get("documents") or [[]])[0]
+            metadatas = (result.get("metadatas") or [[]])[0]
+            for index, doc in enumerate(docs):
+                metadata = metadatas[index] if index < len(metadatas) and metadatas[index] else {}
+                source = metadata.get("source", collection_name)
+                candidates.append({
+                    "document": f"[{source}] {doc}",
+                    "source": source,
+                    "metadata": metadata,
+                })
+        except Exception as e:
+            print(f"[ESSAY-KB] collection {collection_name} unavailable: {e}")
+
+    materials = []
+    if candidates:
+        documents = [item["document"] for item in candidates]
+        reranked = rerank_documents(query_text, documents, top_n=min(top_k, len(documents)))
+        if reranked:
+            ordered = [candidates[item["index"]] for item in reranked]
+        else:
+            ordered = candidates[:top_k]
+        for index, item in enumerate(ordered):
+            materials.append(f"【检索素材{index + 1}】{item['document'][:650]}")
+
+    parts = []
+    if guidance:
+        parts.append("【申论批改规则与风格】\n" + guidance)
+    if materials:
+        parts.append("【申论参考素材】\n" + "\n\n".join(materials))
+    return "\n\n".join(parts)
 
 
 @app.route("/api/essay/review", methods=["POST"])
@@ -2351,10 +2600,38 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
     if m:
         extracted = m.group(1).strip()
 
+    final_answer = answer
+    kb_materials = ""
+    if extracted:
+        kb_materials = _search_kb_for_essay((topic + "\n" + extracted)[:900])
+        if kb_materials:
+            refinement_prompt = f"""请基于以下已识别的申论原文，重新生成最终批改结果。
+
+【题目】
+{topic or '未提供'}
+
+【识别出的原文】
+{extracted[:7000]}
+
+【第一次识别与批改结果】
+{answer[:7000]}
+
+【申论规则、批改风格和参考素材】
+{kb_materials}
+
+要求：保留识别出的原文，不虚构看不清的内容；按照参考规则给出具体评分、问题位置、修改理由和修改后答案。只输出最终批改结果，不要解释检索过程。"""
+            refined = call_deepseek(
+                refinement_prompt,
+                "你是严谨、具体、克制的申论批改教师，必须依据题目、材料和评分规则批改。",
+            )
+            if refined and len(refined.strip()) > 100:
+                final_answer = refined.strip()
+
     return {
-        "answer": answer,
-        "html": markdown.markdown(answer, extensions=["tables", "fenced_code"]),
+        "answer": final_answer,
+        "html": markdown.markdown(final_answer, extensions=["tables", "fenced_code"]),
         "extracted_text": extracted,
+        "has_kb_materials": bool(kb_materials),
         "model": VISION_MODEL
     }
 
@@ -2632,6 +2909,16 @@ def _rebuild_kb_from_archives() -> dict:
         }
     except Exception as e:
         return {"success": False, "error": f"知识库重建失败: {str(e)}", "details": errors[:10]}
+
+
+@app.route("/api/rebuild-essay-kb", methods=["POST", "GET"])
+def rebuild_essay_knowledge_base():
+    """Rebuild the essay-specific vector collection from source and Obsidian notes."""
+    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
+    if secret != CRON_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+    result = _rebuild_essay_materials()
+    return jsonify(result), (200 if result.get("success") else 500)
 
 
 @app.route("/api/debug/embedding-test")

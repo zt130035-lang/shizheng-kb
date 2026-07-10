@@ -1,0 +1,15 @@
+<view class="container">
+  <view class="section-head"><view class="section-title">时政归档</view><view class="section-more" bindtap="load">{{loading?'加载中':'刷新'}}</view></view>
+  <input class="input" placeholder="搜索新闻标题" value="{{keyword}}" bindinput="onSearch" />
+  <view wx:if="{{loading}}" class="status-card">正在加载时政归档...</view>
+  <view wx:if="{{loadError}}" class="status-card error" bindtap="load">{{loadError}}</view>
+  <view class="section list">
+    <block wx:for="{{filtered}}" wx:key="date">
+      <view class="tag">{{item.date}} · {{item.count}} 条</view>
+      <view class="card" wx:for="{{item.items}}" wx:for-item="news" wx:key="filename" bindtap="openArticle" data-news="{{news}}">
+        <view class="card-title">{{news.title}}</view><view class="card-meta">第 {{news.index}} 条</view>
+      </view>
+    </block>
+    <view wx:if="{{!filtered.length && !loading}}" class="empty">暂无匹配内容</view>
+  </view>
+</view>

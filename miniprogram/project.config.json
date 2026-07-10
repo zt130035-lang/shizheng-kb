@@ -1,0 +1,84 @@
+{
+    "description":  "申论写作辅助微信小程序前端",
+    "miniprogramRoot":  "./",
+    "compileType":  "miniprogram",
+    "appid":  "wxfeba76351f310c3a",
+    "projectname":  "beikaobao-miniprogram",
+    "setting":  {
+                    "urlCheck":  false,
+                    "es6":  true,
+                    "enhance":  true,
+                    "postcss":  true,
+                    "minified":  true,
+                    "compileWorklet":  false,
+                    "uglifyFileName":  false,
+                    "uploadWithSourceMap":  true,
+                    "packNpmManually":  false,
+                    "packNpmRelationList":  [
+
+                                            ],
+                    "minifyWXSS":  true,
+                    "minifyWXML":  true,
+                    "localPlugins":  false,
+                    "disableUseStrict":  false,
+                    "useCompilerPlugins":  false,
+                    "condition":  false,
+                    "swc":  false,
+                    "disableSWC":  true,
+                    "babelSetting":  {
+                                         "ignore":  [
+
+                                                    ],
+                                         "disablePlugins":  [
+
+                                                            ],
+                                         "outputPath":  ""
+                                     }
+                },
+    "libVersion":  "latest",
+    "simulatorPluginLibVersion":  {
+
+                                  },
+    "packOptions":  {
+                        "ignore":  [
+                                       {
+                                           "value":  "pages/news",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "pages/detail",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "pages/material",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "pages/quiz",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "pages/settings",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "assets",
+                                           "type":  "folder"
+                                       },
+                                       {
+                                           "value":  "README_MINIPROGRAM.md",
+                                           "type":  "file"
+                                       },
+                                       {
+                                           "value":  "utils/format.js",
+                                           "type":  "file"
+                                       }
+                                   ],
+                        "include":  [
+
+                                    ]
+                    },
+    "editorSetting":  {
+
+                      }
+}

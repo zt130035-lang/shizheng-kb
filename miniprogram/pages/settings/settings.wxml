@@ -1,0 +1,14 @@
+<view class="container">
+  <view class="card">
+    <view class="card-title">后端服务地址</view>
+    <view class="card-meta">上线使用 HTTPS 域名；开发时可用本机地址并关闭合法域名校验。</view>
+    <view class="divider"></view>
+    <input class="input" value="{{baseUrl}}" bindinput="onInput" placeholder="https://shizheng-kb.onrender.com"/>
+    <view style="height:18rpx"></view>
+    <view class="settings-actions">
+      <button class="btn settings-btn" bindtap="save">保存配置</button>
+      <button class="btn secondary settings-btn" disabled="{{checking}}" bindtap="checkService">{{checking?'检测中':'检测后端'}}</button>
+    </view>
+    <view wx:if="{{statusText}}" class="status-line">{{statusText}}</view>
+  </view>
+</view>

@@ -1,0 +1,12 @@
+.mine-hero{background:linear-gradient(135deg,#26332d,#5e6f63 75%,#d6a35b 130%)}
+.result-head{display:flex;align-items:center;justify-content:space-between;gap:16rpx}
+.mini-btn{margin:0;padding:0 20rpx;min-height:58rpx;line-height:58rpx;border-radius:18rpx;background:#ede7da;color:#1f4d3a;font-size:24rpx}
+.ghost-mini{min-height:48rpx;line-height:48rpx;font-size:22rpx;background:#f1eadc}
+.small-empty{padding:32rpx 12rpx}
+.record-item{padding:18rpx 0;border-bottom:1rpx solid rgba(60,76,66,.08)}
+.record-item:last-child{border-bottom:0}
+.record-head{display:flex;align-items:center;justify-content:space-between;gap:16rpx}
+.record-title{font-size:28rpx;font-weight:800;color:#1d2c25;line-height:1.45;flex:1}
+.record-time{margin-top:8rpx;color:#8b8173;font-size:22rpx}
+.record-summary{margin-top:10rpx;color:#58645d;font-size:25rpx;line-height:1.6}
+.tip-line{font-size:25rpx;color:#58645d;line-height:1.75;margin:8rpx 0}

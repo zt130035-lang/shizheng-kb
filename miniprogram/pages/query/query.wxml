@@ -1,0 +1,39 @@
+<view class="container">
+  <view class="hero essay-hero">
+    <view class="hero-title">申论图片批改</view>
+    <view class="hero-subtitle">拍照或从相册上传作文图片，系统会识别文字并给出批改、评分建议和优化方向。</view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">上传作文图片</view>
+    <view class="card-meta">建议上传清晰、裁剪后的作文图片，单张不超过 5MB。</view>
+    <view class="divider"></view>
+
+    <input class="input" placeholder="题目，可不填" value="{{essayTopic}}" bindinput="onTopicInput" disabled="{{reviewing}}" />
+
+    <view class="upload-actions">
+      <button class="btn upload-btn {{reviewing?'disabled':''}}" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="camera">{{reviewing?'识别中':'拍照上传'}}</button>
+      <button class="btn secondary upload-btn {{reviewing?'disabled':''}}" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">{{reviewing?'请稍候':'相册选择'}}</button>
+    </view>
+
+    <view wx:if="{{reviewing}}" class="upload-tip">正在识别和批改，请不要重复点击或退出页面。</view>
+    <image wx:if="{{essayImage}}" class="essay-preview" src="{{essayImage}}" mode="aspectFill"></image>
+  </view>
+
+  <view class="section card guide-card">
+    <view class="section-title">拍摄建议</view>
+    <view class="divider"></view>
+    <view class="tip-line">1. 尽量保证纸面平整、光线充足。</view>
+    <view class="tip-line">2. 图片只保留作文区域，减少桌面背景。</view>
+    <view class="tip-line">3. 字迹较小时建议分段拍摄后分别批改。</view>
+  </view>
+
+  <view class="section card" wx:if="{{essayAnswer}}">
+    <view class="result-head">
+      <view class="section-title">批改结果</view>
+      <button class="mini-btn" bindtap="copyEssayAnswer">复制结果</button>
+    </view>
+    <view class="divider"></view>
+    <rich-text class="rich" nodes="{{essayAnswerHtml}}"></rich-text>
+  </view>
+</view>

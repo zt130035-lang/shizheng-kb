@@ -1,0 +1,41 @@
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  flex: 1 1 260rpx;
+  min-width: 0;
+}
+
+.source-link-box {
+  margin-top: 20rpx;
+  padding: 18rpx 20rpx;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 20rpx;
+  border: 1rpx solid rgba(60, 76, 66, .12);
+  background: #f7f3e8;
+}
+
+.source-link-label {
+  margin-bottom: 8rpx;
+  color: #8b8173;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
+
+.source-link-text {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  color: #1f4d3a;
+  font-size: 24rpx;
+  line-height: 1.55;
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: break-word;
+}

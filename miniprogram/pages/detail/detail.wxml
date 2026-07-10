@@ -1,0 +1,28 @@
+<view class="container">
+  <view class="card">
+    <view class="card-title">{{title}}</view>
+    <view class="card-meta">{{filename}}</view>
+
+    <view wx:if="{{type==='archive'}}" class="divider"></view>
+
+    <view wx:if="{{type==='archive'}}" class="detail-actions">
+      <button class="btn action-btn {{isFav?'secondary':''}}" bindtap="toggleFavorite">{{isFav?'已收藏':'收藏本文'}}</button>
+      <button class="btn ghost action-btn" wx:if="{{sourceUrl}}" bindtap="copySource">复制链接到浏览器打开</button>
+    </view>
+
+    <view wx:if="{{sourceUrl}}" class="source-link-box" bindtap="copySource">
+      <view class="source-link-label">原文链接</view>
+      <text class="source-link-text" selectable="true">{{sourceUrl}}</text>
+    </view>
+  </view>
+
+  <view class="section card">
+    <rich-text class="rich" nodes="{{html}}"></rich-text>
+  </view>
+
+  <view class="section card" wx:if="{{analysisHtml}}">
+    <view class="section-title">考点分析</view>
+    <view class="divider"></view>
+    <rich-text class="rich" nodes="{{analysisHtml}}"></rich-text>
+  </view>
+</view>

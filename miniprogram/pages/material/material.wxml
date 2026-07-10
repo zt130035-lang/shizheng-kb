@@ -1,0 +1,13 @@
+<view class="container">
+  <view class="tabs">
+    <view class="tab {{kind==='reports'?'active':''}}" data-kind="reports" bindtap="switchKind">每日日报</view>
+    <view class="tab {{kind==='topics'?'active':''}}" data-kind="topics" bindtap="switchKind">时政专题</view>
+    <view class="tab {{kind==='morning'?'active':''}}" data-kind="morning" bindtap="switchKind">晨读卡</view>
+  </view>
+  <view wx:if="{{loading}}" class="status-card">正在加载学习材料...</view>
+  <view wx:if="{{loadError}}" class="status-card error" bindtap="load">{{loadError}}，点击重试</view>
+  <view class="section list">
+    <view class="card" wx:for="{{items}}" wx:key="filename" bindtap="openDetail" data-item="{{item}}"><view class="card-title">{{item.title}}</view><view class="card-meta">{{item.date}} {{item.type||''}}</view></view>
+    <view wx:if="{{!items.length && !loading}}" class="empty">暂无内容</view>
+  </view>
+</view>

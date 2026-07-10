@@ -1,0 +1,18 @@
+<view class="container">
+  <view class="hero template-hero">
+    <view class="hero-title">写作模板</view>
+    <view class="hero-subtitle">提供常见题型的基础写法，仅作为练习参考，可结合自己的表达进行调整。</view>
+  </view>
+
+  <view class="section list">
+    <view class="card template-card" wx:for="{{templates}}" wx:key="title">
+      <view class="card-title">{{item.title}}</view>
+      <view class="card-meta">{{item.desc}}</view>
+      <view class="divider"></view>
+      <view class="point" wx:for="{{item.points}}" wx:for-item="point" wx:key="*this">
+        <view class="dot"></view>
+        <view class="point-text">{{point}}</view>
+      </view>
+    </view>
+  </view>
+</view>

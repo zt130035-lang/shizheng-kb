@@ -1,0 +1,11 @@
+<view class="container">
+  <view wx:if="{{!practicing}}">
+    <view class="section-head"><view class="section-title">PDF 题库</view><view class="section-more" bindtap="choosePdf">{{uploading?'上传中':'上传'}}</view></view>
+    <view wx:if="{{loading}}" class="status-card">正在加载题库...</view>
+    <view wx:if="{{loadError}}" class="status-card error" bindtap="loadPdfs">{{loadError}}，点击重试</view>
+    <view class="list"><view class="card" wx:for="{{pdfs}}" wx:key="filename" bindtap="selectPdf" data-name="{{item.filename}}"><view class="card-title">{{item.filename}}</view><view class="card-meta">{{item.size_mb}} MB</view></view><view wx:if="{{!pdfs.length && !loading}}" class="empty">暂无 PDF 题库</view></view>
+    <view wx:if="{{loadingQuestions}}" class="status-card">正在加载题目...</view>
+    <view class="section card" wx:if="{{selectedPdf}}"><view class="card-title">{{selectedPdf}}</view><view class="card-meta">共 {{questions.length}} 题，当前小程序先加载前 50 题训练。</view><view class="divider"></view><button class="btn" disabled="{{loadingQuestions}}" bindtap="startPractice">开始练习</button></view>
+  </view>
+  <view wx:else><view class="card"><view class="row"><view class="tag">{{currentIndex+1}} / {{practiceQuestions.length}}</view><view class="card-meta">正确 {{correctCount}}</view></view><view class="divider"></view><view class="card-title">{{current.question}}</view><view class="options"><view class="option {{selected===item.key?'selected':''}} {{showAnswer&&current.answer===item.key?'right':''}}" wx:for="{{currentOptions}}" wx:key="key" data-key="{{item.key}}" bindtap="selectOption"><view class="opt-key">{{item.key}}</view><view class="opt-text">{{item.text}}</view></view></view><view wx:if="{{showAnswer}}" class="answer {{selected===current.answer?'good':'bad'}}">正确答案：{{current.answer}}</view><view class="divider"></view><view class="row"><button class="btn secondary" bindtap="exitPractice">退出</button><button class="btn" bindtap="nextQuestion">{{currentIndex+1>=practiceQuestions.length?'完成':'下一题'}}</button></view></view></view>
+</view>

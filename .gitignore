@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 data/knowledge_db/
+data/essay_knowledge_db/
+data/essay_images/
+essay_vault/原始数据/
 data/user_data.json
 data/pdf_uploads/*.pdf
 .plan

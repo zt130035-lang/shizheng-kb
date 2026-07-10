@@ -1,0 +1,5 @@
+.template-hero{background:linear-gradient(135deg,#1f4d3a,#54775e 70%,#d6a35b 130%)}
+.template-card{padding-bottom:20rpx}
+.point{display:flex;gap:14rpx;align-items:flex-start;margin:14rpx 0}
+.dot{width:12rpx;height:12rpx;border-radius:50%;background:#1f4d3a;margin-top:14rpx;flex:0 0 12rpx}
+.point-text{font-size:26rpx;color:#334139;line-height:1.65}
