@@ -41,11 +41,18 @@ Page({
     essayImage: '',
     essayAnswer: '',
     essayAnswerHtml: '',
-    reviewing: false
+    reviewing: false,
+    reviewMode: 'fast'
   },
 
   onTopicInput(e) {
     this.setData({ essayTopic: e.detail.value })
+  },
+
+  setReviewMode(e) {
+    if (this.data.reviewing) return
+    const mode = e.currentTarget.dataset.mode === 'deep' ? 'deep' : 'fast'
+    this.setData({ reviewMode: mode })
   },
 
   chooseEssayImage(e) {
@@ -69,11 +76,11 @@ Page({
           essayAnswer: '',
           essayAnswerHtml: ''
         })
-        wx.showLoading({ title: '识别批改中', mask: true })
+        wx.showLoading({ title: this.data.reviewMode === 'deep' ? '深度批改中' : '快速批改中', mask: true })
         try {
           const data = await api.reviewEssayImage(file.tempFilePath, {
             topic: this.data.essayTopic || '',
-            mode: 'review'
+            mode: this.data.reviewMode
           })
           if (data.error) {
             wx.showToast({ title: userMessage(data.error).slice(0, 28), icon: 'none' })
