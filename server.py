@@ -62,6 +62,7 @@ RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
 VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
+VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "2200"))
 
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -2328,7 +2329,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
             }
         ],
         "temperature": 0.2,
-        "max_tokens": 4096
+        "max_tokens": VISION_MAX_TOKENS
     }
 
     resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
