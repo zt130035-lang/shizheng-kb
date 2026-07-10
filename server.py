@@ -65,7 +65,7 @@ RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
 VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
-VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "2200"))
+VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "1600"))
 
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -2169,7 +2169,7 @@ def _search_news_kb_for_essay(text: str, top_k: int = 5) -> str:
     return "\n\n".join(materials)
 
 
-def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
+def _search_kb_for_essay(text: str, top_k: int = 5, use_rerank: bool = True) -> str:
     """Search essay materials first, then fall back to the original news collection."""
     query_text = text[:600] if len(text) > 600 else text
     embeddings = get_embedding([query_text])
@@ -2212,9 +2212,12 @@ def _search_kb_for_essay(text: str, top_k: int = 5) -> str:
     materials = []
     if candidates:
         documents = [item["document"] for item in candidates]
-        reranked = rerank_documents(query_text, documents, top_n=min(top_k, len(documents)))
-        if reranked:
-            ordered = [candidates[item["index"]] for item in reranked]
+        if use_rerank:
+            reranked = rerank_documents(query_text, documents, top_n=min(top_k, len(documents)))
+            if reranked:
+                ordered = [candidates[item["index"]] for item in reranked]
+            else:
+                ordered = candidates[:top_k]
         else:
             ordered = candidates[:top_k]
         for index, item in enumerate(ordered):
@@ -2520,7 +2523,7 @@ def essay_compare():
 
 # --- 图片申论批改 ---
 def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "review") -> dict:
-    """识别申论图片文字，并生成批改/润色结果。"""
+    """识别申论图片文字，再用一次文本模型生成最终批改结果。"""
     import base64
     ext = os.path.splitext(image_path)[1].lower()
     mime = "image/jpeg"
@@ -2533,23 +2536,30 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         b64 = base64.b64encode(f.read()).decode("utf-8")
 
     topic_line = f"\n申论题目：{topic}" if topic else ""
+    kb_materials = (
+        _search_kb_for_essay(topic, top_k=3, use_rerank=False)
+        if topic
+        else _load_essay_guidance(max_chars=3500)
+    )
     task_name = "批改并润色" if mode == "review" else "润色优化"
-    prompt = f"""请先准确识别图片中的中文申论作文文字，再对其进行{task_name}。{topic_line}
+    prompt = f"""请准确识别图片中的中文申论作文文字，并直接完成{task_name}。{topic_line}
 
 要求：
-1. 先输出【识别原文】，尽量保持原段落结构；看不清的字用“□”标记。
-2. 按公务员考试申论标准评价：立意、结构、论证、语言、素材、规范性。
-3. 指出原文具体问题，不要只说空话。
-4. 给出一版可直接背诵/参考的【润色后文章】。
-5. 最后总结 3-5 条提升建议。
+1. 尽量保持原段落结构和标点；看不清的字用“□”标记。
+2. 按公务员考试申论标准评价：立意、结构、论证、语言、素材和规范性。
+3. 指出原文具体问题，给出修改理由和可执行的修改建议。
+4. 不要补写图片中没有出现的原文内容。
+5. 参考以下申论规则、批改风格和素材，但不要强行套用无关内容：
+
+{kb_materials or '暂无额外知识库内容，请依据通用申论原则批改。'}
 
 请严格按以下格式输出：
 
 ## 识别原文
-[从图片识别出的文字]
+[从图片识别出的完整文字]
 
 ## 批改意见
-[分点说明]
+[具体评分、问题位置、失分原因和修改建议]
 
 ## 润色后文章
 [完整润色稿]
@@ -2567,7 +2577,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         "messages": [
             {
                 "role": "system",
-                "content": "你是资深公务员考试申论阅卷专家，同时擅长从作文照片中识别中文文字。"
+                "content": "你是资深公务员考试申论阅卷专家，同时擅长从作文照片中识别中文文字。请一次完成识别和批改。"
             },
             {
                 "role": "user",
@@ -2599,39 +2609,19 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
     m = re.search(r"##\s*识别原文\s*\n([\s\S]*?)(?=\n##\s*批改意见|\n##\s*润色后文章|$)", answer)
     if m:
         extracted = m.group(1).strip()
+    elif answer.strip():
+        extracted = answer.strip()
+    extracted = re.split(r"\n##\s+", extracted, maxsplit=1)[0].strip()
 
-    final_answer = answer
-    kb_materials = ""
-    if extracted:
-        kb_materials = _search_kb_for_essay((topic + "\n" + extracted)[:900])
-        if kb_materials:
-            refinement_prompt = f"""请基于以下已识别的申论原文，重新生成最终批改结果。
-
-【题目】
-{topic or '未提供'}
-
-【识别出的原文】
-{extracted[:7000]}
-
-【第一次识别与批改结果】
-{answer[:7000]}
-
-【申论规则、批改风格和参考素材】
-{kb_materials}
-
-要求：保留识别出的原文，不虚构看不清的内容；按照参考规则给出具体评分、问题位置、修改理由和修改后答案。只输出最终批改结果，不要解释检索过程。"""
-            refined = call_deepseek(
-                refinement_prompt,
-                "你是严谨、具体、克制的申论批改教师，必须依据题目、材料和评分规则批改。",
-            )
-            if refined and len(refined.strip()) > 100:
-                final_answer = refined.strip()
+    final_answer = answer.strip()
+    degraded = not extracted
 
     return {
         "answer": final_answer,
         "html": markdown.markdown(final_answer, extensions=["tables", "fenced_code"]),
         "extracted_text": extracted,
         "has_kb_materials": bool(kb_materials),
+        "degraded": degraded,
         "model": VISION_MODEL
     }
 
