@@ -2332,7 +2332,17 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
     }
 
     resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        body = ""
+        try:
+            body = resp.text[:500]
+        except Exception:
+            body = ""
+        if resp.status_code == 401:
+            raise RuntimeError(f"视觉API认证失败：VISION_API_KEY无效或未生效；当前模型={VISION_MODEL}；状态码=401")
+        if resp.status_code == 403:
+            raise RuntimeError(f"视觉API无权限：当前VISION_API_KEY没有调用该视觉模型权限；当前模型={VISION_MODEL}；状态码=403；返回={body}")
+        raise RuntimeError(f"视觉API调用失败：状态码={resp.status_code}；当前模型={VISION_MODEL}；返回={body}")
     answer = resp.json()["choices"][0]["message"]["content"]
 
     extracted = ""
