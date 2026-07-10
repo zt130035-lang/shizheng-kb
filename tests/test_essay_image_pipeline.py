@@ -14,7 +14,10 @@ class _VisionResponse:
             "choices": [
                 {
                     "message": {
-                        "content": "## 识别原文\n基层治理需要坚持以人民为中心。"
+                        "content": (
+                            "## 识别原文\n基层治理需要坚持以人民为中心。\n\n"
+                            "## 批改意见\n论证需要更具体。"
+                        )
                     }
                 }
             ]
@@ -22,9 +25,8 @@ class _VisionResponse:
 
 
 class EssayImagePipelineTest(unittest.TestCase):
-    def test_vision_only_extracts_text_before_one_final_review(self):
+    def test_image_review_uses_one_vision_call_with_kb_context(self):
         captured = {}
-        expected_answer = "## 总体评分\n80分\n\n" + ("具体批改结果" * 20)
 
         def fake_vision_post(url, headers=None, json=None, timeout=None):
             captured["prompt"] = json["messages"][1]["content"][0]["text"]
@@ -36,17 +38,17 @@ class EssayImagePipelineTest(unittest.TestCase):
                 image.write(b"test image")
             with patch.object(server.requests, "post", side_effect=fake_vision_post):
                 with patch.object(server, "_search_kb_for_essay", return_value="规则和素材") as search:
-                    with patch.object(server, "call_deepseek", return_value=expected_answer) as deepseek:
+                    with patch.object(server, "call_deepseek") as deepseek:
                         result = server._call_vision_essay_review(image_path, topic="基层治理")
         finally:
             os.unlink(image_path)
 
-        self.assertIn("只负责准确识别", captured["prompt"])
-        self.assertNotIn("## 批改意见", captured["prompt"])
+        self.assertIn("规则和素材", captured["prompt"])
+        self.assertIn("批改并润色", captured["prompt"])
         search.assert_called_once()
-        deepseek.assert_called_once()
+        deepseek.assert_not_called()
         self.assertTrue(result["has_kb_materials"])
-        self.assertEqual(result["answer"], expected_answer)
+        self.assertIn("## 批改意见", result["answer"])
 
 
 if __name__ == "__main__":
