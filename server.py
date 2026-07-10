@@ -2522,8 +2522,19 @@ def essay_compare():
 
 
 # --- 图片申论批改 ---
+def _extract_essay_text(answer: str) -> str:
+    """Extract the OCR section from a vision response."""
+    text = (answer or "").strip()
+    match = re.search(
+        r"##\s*识别原文\s*\n([\s\S]*?)(?=\n##\s*批改意见|\n##\s*润色后文章|$)",
+        text,
+    )
+    extracted = match.group(1).strip() if match else text
+    return re.split(r"\n##\s+", extracted, maxsplit=1)[0].strip()
+
+
 def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "review") -> dict:
-    """识别申论图片文字，再用一次文本模型生成最终批改结果。"""
+    """Run fast one-pass review or deep OCR-plus-review for an essay image."""
     import base64
     ext = os.path.splitext(image_path)[1].lower()
     mime = "image/jpeg"
@@ -2535,14 +2546,30 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
 
+    deep_mode = mode == "deep"
     topic_line = f"\n申论题目：{topic}" if topic else ""
-    kb_materials = (
-        _search_kb_for_essay(topic, top_k=3, use_rerank=False)
-        if topic
-        else _load_essay_guidance(max_chars=3500)
-    )
-    task_name = "批改并润色" if mode == "review" else "润色优化"
-    prompt = f"""请准确识别图片中的中文申论作文文字，并直接完成{task_name}。{topic_line}
+    if deep_mode:
+        kb_materials = ""
+        prompt = f"""你只负责准确识别图片中的中文申论作文文字。{topic_line}
+
+要求：
+1. 尽量保持原段落结构和标点；看不清的字用“□”标记。
+2. 不要评分、批改、润色或解释，只做文字识别。
+3. 不要补写图片中没有出现的内容。
+4. 只输出以下格式：
+
+## 识别原文
+[从图片识别出的完整文字]
+"""
+        system_prompt = "你是中文申论作文 OCR 助手，只负责准确识别图片文字。"
+    else:
+        kb_materials = (
+            _search_kb_for_essay(topic, top_k=3, use_rerank=False)
+            if topic
+            else _load_essay_guidance(max_chars=3500)
+        )
+        task_name = "润色优化" if mode == "polish" else "批改并润色"
+        prompt = f"""请准确识别图片中的中文申论作文文字，并直接完成{task_name}。{topic_line}
 
 要求：
 1. 尽量保持原段落结构和标点；看不清的字用“□”标记。
@@ -2567,6 +2594,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
 ## 提升建议
 [3-5条]
 """
+        system_prompt = "你是资深公务员考试申论阅卷专家，同时擅长从作文照片中识别中文文字。请一次完成识别和批改。"
 
     headers = {
         "Authorization": f"Bearer {VISION_API_KEY}",
@@ -2577,7 +2605,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         "messages": [
             {
                 "role": "system",
-                "content": "你是资深公务员考试申论阅卷专家，同时擅长从作文照片中识别中文文字。请一次完成识别和批改。"
+                "content": system_prompt
             },
             {
                 "role": "user",
@@ -2605,16 +2633,38 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         raise RuntimeError(f"视觉API调用失败：状态码={resp.status_code}；当前模型={VISION_MODEL}；返回={body}")
     answer = resp.json()["choices"][0]["message"]["content"]
 
-    extracted = ""
-    m = re.search(r"##\s*识别原文\s*\n([\s\S]*?)(?=\n##\s*批改意见|\n##\s*润色后文章|$)", answer)
-    if m:
-        extracted = m.group(1).strip()
-    elif answer.strip():
-        extracted = answer.strip()
-    extracted = re.split(r"\n##\s+", extracted, maxsplit=1)[0].strip()
-
+    extracted = _extract_essay_text(answer)
     final_answer = answer.strip()
     degraded = not extracted
+
+    if deep_mode and extracted:
+        kb_materials = _search_kb_for_essay(
+            (topic + "\n" + extracted)[:900], top_k=5, use_rerank=True
+        )
+        refinement_prompt = f"""请基于以下已识别的申论原文，完成最终的批改和润色。
+
+【题目】
+{topic or '未提供'}
+
+【识别出的原文】
+{extracted[:7000]}
+
+【申论规则、批改风格和参考素材】
+{kb_materials or '未检索到额外素材，请仅依据通用申论评分规则完成。'}
+
+要求：保留识别出的原文，不虚构看不清的内容；依据参考规则给出具体评分、问题位置、失分原因、修改理由和修改后答案。只输出最终结果，不要解释检索过程。"""
+        refined = call_deepseek(
+            refinement_prompt,
+            "你是严谨、具体、克制的申论批改教师，必须依据题目、材料和评分规则批改。",
+        )
+        if refined and len(refined.strip()) > 100 and not refined.lstrip().startswith("AI调用失败:"):
+            final_answer = refined.strip()
+        else:
+            final_answer = (
+                f"## 识别原文\n{extracted}\n\n"
+                "## 批改状态\n深度复核服务暂时不可用，请稍后重试。"
+            )
+            degraded = True
 
     return {
         "answer": final_answer,
@@ -2622,6 +2672,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         "extracted_text": extracted,
         "has_kb_materials": bool(kb_materials),
         "degraded": degraded,
+        "mode": "deep" if deep_mode else "fast",
         "model": VISION_MODEL
     }
 
