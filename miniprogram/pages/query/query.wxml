@@ -97,6 +97,55 @@
       <view class="score-number">{{fullReview.overview.total_score}}<text wx:if="{{fullReview.overview.total_score_max}}">/{{fullReview.overview.total_score_max}}</text></view>
       <view class="score-label">总分（估）</view>
     </view>
-    <rich-text class="rich" nodes="{{essayAnswerHtml}}"></rich-text>
+    <view wx:if="{{fullReview && fullReview.overview}}" class="review-overview">
+      <view wx:if="{{fullReview.overview.overall}}" class="overview-text">{{fullReview.overview.overall}}</view>
+      <view wx:if="{{fullReview.overview.scoring_note}}" class="score-note">{{fullReview.overview.scoring_note}}</view>
+      <view wx:if="{{fullReview.overview.priority_fixes && fullReview.overview.priority_fixes.length}}" class="overview-fixes">
+        <view class="subsection-title">优先改进</view>
+        <view class="fix-item" wx:for="{{fullReview.overview.priority_fixes}}" wx:key="*this">{{index + 1}}. {{item}}</view>
+      </view>
+    </view>
+
+    <view wx:if="{{fullReview && fullReview.questions && fullReview.questions.length}}" class="question-selector">
+      <view class="selector-label">选择题目查看</view>
+      <view class="question-picker">
+        <button class="question-picker-btn {{selectedQuestionIndex == index ? 'active' : ''}}" wx:for="{{fullReview.questions}}" wx:key="displayId" data-index="{{index}}" bindtap="selectQuestion" disabled="{{reviewing}}">第{{item.displayId}}题<text wx:if="{{item.max_score}}"> · {{item.displayScore}}分</text></button>
+      </view>
+    </view>
+
+    <view wx:if="{{selectedQuestion}}" class="question-list">
+      <view class="question-card">
+        <view class="question-head">
+          <view class="question-heading">
+            <view class="question-number">第{{selectedQuestion.displayId}}题</view>
+            <view wx:if="{{selectedQuestion.type}}" class="question-type">{{selectedQuestion.type}}</view>
+            <view wx:if="{{selectedQuestion.task}}" class="question-task">{{selectedQuestion.task}}</view>
+          </view>
+          <view class="question-score"><text>{{selectedQuestion.displayScore}}</text><text wx:if="{{selectedQuestion.max_score}}">/{{selectedQuestion.max_score}}</text></view>
+        </view>
+
+        <view wx:if="{{selectedQuestion.score_reason}}" class="question-reason"><text class="field-label">评分依据</text>{{selectedQuestion.score_reason}}</view>
+
+        <view wx:if="{{selectedQuestion.key_points && selectedQuestion.key_points.length}}" class="points-section">
+          <view class="subsection-title">材料要点核对</view>
+          <view class="point-item" wx:for="{{selectedQuestion.key_points}}" wx:for-item="point" wx:key="point">
+            <view class="point-head">
+              <view class="point-index">{{index + 1}}</view>
+              <view class="point-title">{{point.point}}</view>
+              <view class="point-status {{point.statusClass}}">{{point.status}}</view>
+            </view>
+            <view wx:if="{{point.evidence}}" class="point-detail"><text class="field-label">材料依据</text><text>{{point.evidence}}</text></view>
+            <view wx:if="{{point.comment}}" class="point-detail"><text class="field-label">核对说明</text><text>{{point.comment}}</text></view>
+          </view>
+        </view>
+
+        <view wx:if="{{selectedQuestion.answer_evaluation}}" class="answer-block"><view class="subsection-title">答案评价</view><view class="block-text">{{selectedQuestion.answer_evaluation}}</view></view>
+        <view wx:if="{{selectedQuestion.problems && selectedQuestion.problems.length}}" class="answer-block"><view class="subsection-title">主要问题</view><view class="problem-item" wx:for="{{selectedQuestion.problems}}" wx:key="*this">{{item}}</view></view>
+        <view wx:if="{{selectedQuestion.modification}}" class="answer-block"><view class="subsection-title">修改建议</view><view class="block-text">{{selectedQuestion.modification}}</view></view>
+        <view wx:if="{{selectedQuestion.suggested_answer}}" class="suggested-block"><view class="subsection-title">{{fullReview._has_answers ? '参考修改答案' : '参考答案'}}</view><view class="suggested-text">{{selectedQuestion.suggested_answer}}</view></view>
+      </view>
+    </view>
+
+    <rich-text wx:if="{{!fullReview || !fullReview.questions || !fullReview.questions.length}}" class="rich" nodes="{{essayAnswerHtml}}"></rich-text>
   </view>
 </view>

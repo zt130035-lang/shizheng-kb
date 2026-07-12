@@ -871,16 +871,20 @@ def _full_review_markdown(report: dict) -> str:
             lines.extend([f"评分依据：{item['score_reason']}", ""])
         points = item.get("key_points") or []
         if points:
-            lines.extend(["### 材料要点核对", "| 材料要点 | 作答状态 | 依据与说明 |", "|---|---|---|"])
-            for point in points:
+            lines.extend(["### 材料要点核对", ""])
+            for point_index, point in enumerate(points, 1):
                 if isinstance(point, str):
-                    lines.append(f"| {point} | 未结构化 | |")
+                    lines.extend([f"**要点 {point_index}**　{point}", ""])
                     continue
-                lines.append(
-                    f"| {point.get('point', '')} | {point.get('status', '未判断')} | "
-                    f"{point.get('comment', point.get('evidence', ''))} |"
-                )
-            lines.append("")
+                lines.extend([
+                    f"**要点 {point_index}**　{point.get('point', '')}",
+                    f"- 作答状态：{point.get('status', '未判断')}",
+                ])
+                if point.get("evidence"):
+                    lines.append(f"- 材料依据：{point['evidence']}")
+                if point.get("comment"):
+                    lines.append(f"- 核对说明：{point['comment']}")
+                lines.append("")
         answer_label = "参考修改答案" if report.get("_has_answers", True) else "参考答案"
         for label, key in (("答案评价", "answer_evaluation"), ("主要问题", "problems"),
                            ("修改建议", "modification"), (answer_label, "suggested_answer")):

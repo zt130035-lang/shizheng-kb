@@ -7,6 +7,33 @@ function safeHtml(html) {
   return String(html).replace(/target="_blank"/g, '')
 }
 
+function statusClass(status) {
+  const value = String(status || '')
+  if (value.includes('部分')) return 'status-partial'
+  if (value.includes('未命中')) return 'status-miss'
+  if (value.includes('材料外')) return 'status-outside'
+  if (value.includes('命中')) return 'status-hit'
+  return 'status-unknown'
+}
+
+function normalizeReviewReport(report) {
+  if (!report || typeof report !== 'object') return null
+  const questions = Array.isArray(report.questions) ? report.questions.map((question, index) => {
+    const item = question && typeof question === 'object' ? question : {}
+    const points = Array.isArray(item.key_points) ? item.key_points.map((point) => {
+      if (typeof point === 'string') return { point, status: '未结构化', statusClass: 'status-unknown' }
+      const value = point && typeof point === 'object' ? point : {}
+      return { ...value, statusClass: statusClass(value.status) }
+    }) : []
+    const problems = Array.isArray(item.problems)
+      ? item.problems
+      : (item.problems ? [item.problems] : [])
+    const hasScore = item.score !== null && item.score !== undefined && item.score !== ''
+    return { ...item, displayId: item.id || index + 1, displayScore: hasScore ? item.score : '待评', key_points: points, problems }
+  }) : []
+  return { ...report, questions }
+}
+
 function userMessage(err) {
   const msg = String(err || '')
   if (msg.includes('额度') || msg.includes('insufficient') || msg.includes('余额')) return 'AI额度不足，请稍后再试'
@@ -50,6 +77,8 @@ Page({
     referenceFileToken: '',
     referenceFileName: '',
     fullReview: null,
+    selectedQuestionIndex: 0,
+    selectedQuestion: null,
     essayTopic: '',
     essayImage: '',
     essayImages: [],
@@ -78,7 +107,9 @@ Page({
       paperFileToken: result.paper_id || '',
       paperFileName: result.filename || '已选择手机本地试卷',
       paperText: '',
-      fullReview: null
+      fullReview: null,
+      selectedQuestion: null,
+      selectedQuestionIndex: 0
     })
   },
 
@@ -222,7 +253,9 @@ Page({
           paperFileToken: '',
           paperFileName: file.name || '已选择整套试卷',
           materialImages: [],
-          fullReview: null
+          fullReview: null,
+          selectedQuestion: null,
+          selectedQuestionIndex: 0
         })
       },
       fail: (err) => {
@@ -260,7 +293,7 @@ Page({
     if (!this.data.paperFilePath && !this.data.paperFileToken && !this.data.materialImages.length && this.data.paperText.trim().length < 20) {
       return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
     }
-    this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
+    this.setData({ reviewing: true, fullReview: null, selectedQuestion: null, selectedQuestionIndex: 0, essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
     wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : (this.data.answerText.trim() ? '整套批改中' : '生成参考答案'), mask: true })
     try {
       let imageMaterial = ''
@@ -304,8 +337,11 @@ Page({
         return
       }
       const answer = result.answer || ''
+      const normalizedReport = normalizeReviewReport(result.report)
       this.setData({
-        fullReview: result.report || null,
+        fullReview: normalizedReport,
+        selectedQuestionIndex: 0,
+        selectedQuestion: normalizedReport && normalizedReport.questions.length ? normalizedReport.questions[0] : null,
         essayAnswer: answer,
         essayAnswerHtml: safeHtml(result.html || answer)
       })
@@ -316,6 +352,13 @@ Page({
       wx.hideLoading()
       this.setData({ reviewing: false, uploadProgressText: '' })
     }
+  },
+
+  selectQuestion(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const questions = this.data.fullReview && this.data.fullReview.questions
+    if (!Array.isArray(questions) || index < 0 || index >= questions.length) return
+    this.setData({ selectedQuestionIndex: index, selectedQuestion: questions[index] })
   },
 
   setReviewMode(e) {
