@@ -30,7 +30,7 @@
       <textarea class="textarea reference-area" placeholder="粘贴官方答案和分值" value="{{referenceText}}" bindinput="onReferenceTextInput" disabled="{{reviewing}}" maxlength="18000"></textarea>
       <button class="btn secondary file-btn" bindtap="openReferencePicker" disabled="{{reviewing}}">选择聊天文件</button>
       <view wx:if="{{referenceFileName}}" class="file-name">已选：{{referenceFileName}}</view>
-      <view class="answer-label">文字答案（可选）</view>
+      <view class="answer-label">我的答案（可选）</view>
       <textarea class="textarea full-textarea answer-area" placeholder="粘贴答案，可分题填写" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>
       <button class="btn secondary file-btn" bindtap="chooseAnswerImages" disabled="{{reviewing}}">上传答案图片（最多9张）</button>
       <view wx:if="{{answerImages.length}}" class="answer-image-meta">已选 {{answerImages.length}} 张，按顺序识别。</view>
@@ -41,7 +41,8 @@
           <button class="remove-image-btn" data-index="{{index}}" bindtap="removeAnswerImage" disabled="{{reviewing}}">移除</button>
         </view>
       </view>
-      <button class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
+      <button wx:if="{{answerText || answerImages.length}}" class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
+      <button wx:else class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'生成中':'生成参考答案'}}</button>
       <view wx:if="{{reviewing}}" class="upload-tip">{{uploadProgressText || '正在批改，请稍候。'}}</view>
     </view>
 

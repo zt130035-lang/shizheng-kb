@@ -845,6 +845,8 @@ def _full_review_markdown(report: dict) -> str:
     overview = report.get("overview") or {}
     lines = ["## 申论整套批改结果", ""]
     total = overview.get("total_score", "未给出")
+    if total is None or total == "":
+        total = "未评分"
     maximum = overview.get("total_score_max", "")
     score = f"{total}/{maximum}" if maximum else str(total)
     lines.extend([f"**总评估分：{score}**", ""])
@@ -858,6 +860,8 @@ def _full_review_markdown(report: dict) -> str:
         question_id = item.get("id") or index
         title = item.get("task") or item.get("type") or "小题"
         q_score = item.get("score", "未给出")
+        if q_score is None or q_score == "":
+            q_score = "未评分"
         q_max = item.get("max_score", "")
         q_score_text = f"{q_score}/{q_max}" if q_max else str(q_score)
         lines.extend([f"## 第{question_id}题：{title}", f"**得分：{q_score_text}**", ""])
@@ -877,8 +881,9 @@ def _full_review_markdown(report: dict) -> str:
                     f"{point.get('comment', point.get('evidence', ''))} |"
                 )
             lines.append("")
+        answer_label = "参考修改答案" if report.get("_has_answers", True) else "参考答案"
         for label, key in (("答案评价", "answer_evaluation"), ("主要问题", "problems"),
-                           ("修改建议", "modification"), ("参考修改答案", "suggested_answer")):
+                           ("修改建议", "modification"), (answer_label, "suggested_answer")):
             value = item.get(key)
             if isinstance(value, list):
                 value = "；".join(str(v) for v in value)
@@ -2654,8 +2659,7 @@ def essay_full_review():
 
     if not paper_text:
         return jsonify({"error": "请上传或粘贴申论材料与题目"}), 400
-    if not answers:
-        return jsonify({"error": "请填写各题作答内容，建议按第1题、第2题分段"}), 400
+    has_answers = bool(answers)
 
     # Keep a complete enough context for ordinary national/provincial exam papers,
     # while avoiding an unbounded request from a scanned or duplicated document.
@@ -2664,7 +2668,7 @@ def essay_full_review():
     paper_truncated = len(paper_text) > paper_limit
     answer_truncated = len(answers) > answer_limit
     paper_for_prompt = paper_text[:paper_limit]
-    answers_for_prompt = answers[:answer_limit]
+    answers_for_prompt = answers[:answer_limit] if has_answers else "未提供考生作答，请只生成参考要点和参考答案。"
     retrieval_text = "\n".join([topic, paper_for_prompt[:1200], answers_for_prompt[:800]]).strip()
     kb_materials = _search_kb_for_essay(retrieval_text, top_k=8, use_rerank=True)
     reference_line = reference_text[:18000] if reference_text else "未提供官方参考答案或分值。"
@@ -2685,10 +2689,10 @@ def essay_full_review():
 
 请完成以下任务：
 1. 识别整套试卷包含的题目，判断每题题型（概括归纳、综合分析、提出对策、应用文、大作文或其他）。
-2. 逐题从材料中提炼可核对的要点，逐项判断考生答案是“命中”“部分命中”“未命中”或“材料外”。
-3. 优先使用官方参考答案和分值评分；没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。
-4. 给出每道题的参考修改答案；大作文则给出立意、结构和关键段落的修改方向，不要无依据杜撰材料事实。
-5. 给出整套优先提分事项。
+2. 逐题从材料中提炼评分要点。{('如果已提供考生作答，逐项判断答案是“命中”“部分命中”“未命中”或“材料外”；如果未提供作答，则不要虚构考生表现。') if has_answers else '当前未提供考生作答，只输出参考要点、参考答案和评分点。'}
+3. 优先使用官方参考答案和分值评分；没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。未提供考生作答时，得分字段填 null，并说明“待提交作答后评分”。
+4. 给出每道题的参考答案；如果已提供考生作答，再给出参考修改答案。大作文给出立意、结构和关键段落方向，不要无依据杜撰材料事实。
+5. 给出整套学习重点。
 
 只输出合法 JSON，不要 Markdown 代码块，不要额外解释，结构必须符合：
 {{
@@ -2743,6 +2747,7 @@ def essay_full_review():
             report["overview"] = {}
         if not isinstance(report.get("questions"), list):
             report["questions"] = []
+        report["_has_answers"] = has_answers
         rendered = _full_review_markdown(report)
 
     if paper_truncated or answer_truncated:
@@ -2757,6 +2762,8 @@ def essay_full_review():
         "report": report,
         "has_kb_materials": bool(kb_materials),
         "has_reference": bool(reference_text),
+        "has_answers": has_answers,
+        "mode": "review" if has_answers else "reference",
         "paper_chars": len(paper_text),
         "answer_chars": len(answers),
         "source": source,

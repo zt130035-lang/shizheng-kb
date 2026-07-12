@@ -87,6 +87,22 @@ def test_full_review_requires_paper_and_answers():
     assert "材料与题目" in response.get_json()["error"]
 
 
+def test_full_review_without_answers_generates_reference_mode():
+    client = server.app.test_client()
+    with patch.object(server, "_search_kb_for_essay", return_value="申论规则") as search, \
+         patch.object(server, "call_deepseek", return_value=_ai_report()) as call:
+        response = client.post("/api/essay/full-review", json={
+            "paper_text": "材料一……\n第1题：概括问题。",
+        })
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["mode"] == "reference"
+    assert body["has_answers"] is False
+    assert "未提供考生作答" in call.call_args.args[0]
+    assert search.called
+
+
 def test_answer_ocr_endpoint_returns_text():
     client = server.app.test_client()
     with patch.object(server, "_call_vision_essay_ocr", return_value={

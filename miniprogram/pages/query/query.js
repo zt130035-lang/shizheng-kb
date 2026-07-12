@@ -260,12 +260,8 @@ Page({
     if (!this.data.paperFilePath && !this.data.paperFileToken && !this.data.materialImages.length && this.data.paperText.trim().length < 20) {
       return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
     }
-    if (this.data.answerText.trim().length < 2 && !this.data.answerImages.length) {
-      return wx.showToast({ title: '请填写文字答案或上传答案图片', icon: 'none' })
-    }
-
     this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
-    wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : '整套批改中', mask: true })
+    wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : (this.data.answerText.trim() ? '整套批改中' : '生成参考答案'), mask: true })
     try {
       let imageMaterial = ''
       if (this.data.materialImages.length) {
