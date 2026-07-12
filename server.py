@@ -24,11 +24,12 @@ import glob
 import time
 import hashlib
 import secrets
+import io
 import fitz  # PyMuPDF
 import requests
 import chromadb
 import markdown
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from datetime import datetime
 from typing import List
 from werkzeug.utils import secure_filename
@@ -53,6 +54,21 @@ ESSAY_TEMP_DIR = os.path.join(DATA_DIR, "essay_temp")
 # 确保目录存在
 for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR, ESSAY_TEMP_DIR]:
     os.makedirs(d, exist_ok=True)
+
+
+def _cleanup_old_files(directory: str, max_age_seconds: int = 1800):
+    """Remove expired transient uploads so a free deployment does not fill its disk."""
+    now = time.time()
+    for filepath in glob.glob(os.path.join(directory, "*")):
+        try:
+            if os.path.isfile(filepath) and now - os.path.getmtime(filepath) > max_age_seconds:
+                os.remove(filepath)
+        except OSError:
+            continue
+
+
+_cleanup_old_files(ESSAY_TEMP_DIR)
+_cleanup_old_files(IMAGE_UPLOADS_DIR)
 
 # 用户数据文件
 USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
@@ -2523,6 +2539,7 @@ def mobile_upload_page():
 @app.route("/api/essay/paper-upload", methods=["POST"])
 def essay_paper_upload():
     """Parse a locally selected paper and return a short-lived token for full review."""
+    _cleanup_old_files(ESSAY_TEMP_DIR)
     if "file" not in request.files:
         return jsonify({"error": "未选择整套试卷文件"}), 400
     file = request.files["file"]
@@ -2574,6 +2591,8 @@ def essay_full_review():
     uploaded = request.files.get("file") or request.files.get("paper_file")
     paper_text = str(data.get("paper_text", "") or "").strip()
     paper_id = str(data.get("paper_id", "") or "").strip()
+    reference_text = str(data.get("reference_text", "") or "").strip()
+    reference_id = str(data.get("reference_id", "") or "").strip()
     source = "text"
     temporary_path = ""
 
@@ -2614,6 +2633,19 @@ def essay_full_review():
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    if not reference_text and reference_id:
+        reference_path = _essay_temp_paper_path(reference_id)
+        try:
+            with open(reference_path, "r", encoding="utf-8") as f:
+                reference_record = json.load(f)
+            if time.time() - float(reference_record.get("created_at", 0)) > 30 * 60:
+                raise ValueError("参考答案文件已过期，请重新选择")
+            reference_text = str(reference_record.get("paper_text", "")).strip()
+        except FileNotFoundError:
+            return jsonify({"error": "参考答案文件不存在，请重新选择"}), 400
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
     answers = data.get("answers", "")
     if isinstance(answers, (dict, list)):
         answers = json.dumps(answers, ensure_ascii=False)
@@ -2635,6 +2667,7 @@ def essay_full_review():
     answers_for_prompt = answers[:answer_limit]
     retrieval_text = "\n".join([topic, paper_for_prompt[:1200], answers_for_prompt[:800]]).strip()
     kb_materials = _search_kb_for_essay(retrieval_text, top_k=8, use_rerank=True)
+    reference_line = reference_text[:18000] if reference_text else "未提供官方参考答案或分值。"
 
     prompt = f"""请批改一整套申论试卷，必须同时依据【试卷材料与题目】、【考生作答】和【申论知识库规则】完成逐题评分与修改。
 
@@ -2644,13 +2677,16 @@ def essay_full_review():
 【考生作答】
 {answers_for_prompt}
 
+【官方参考答案与分值（可选）】
+{reference_line}
+
 【申论知识库规则与参考内容】
 {kb_materials or '未检索到额外内容，请依据通用申论评分原则，并明确说明依据不足。'}
 
 请完成以下任务：
 1. 识别整套试卷包含的题目，判断每题题型（概括归纳、综合分析、提出对策、应用文、大作文或其他）。
 2. 逐题从材料中提炼可核对的要点，逐项判断考生答案是“命中”“部分命中”“未命中”或“材料外”。
-3. 按题目分值给出估算分、得分理由、失分点和可执行的修改动作。没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。
+3. 优先使用官方参考答案和分值评分；没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。
 4. 给出每道题的参考修改答案；大作文则给出立意、结构和关键段落的修改方向，不要无依据杜撰材料事实。
 5. 给出整套优先提分事项。
 
@@ -2720,10 +2756,73 @@ def essay_full_review():
         "html": html,
         "report": report,
         "has_kb_materials": bool(kb_materials),
+        "has_reference": bool(reference_text),
         "paper_chars": len(paper_text),
         "answer_chars": len(answers),
         "source": source,
     })
+
+
+@app.route("/api/essay/export", methods=["POST"])
+def essay_export():
+    """Export a displayed review as a Chinese DOCX or PDF file."""
+    data = request.get_json(silent=True) or {}
+    answer = str(data.get("answer", "") or "").strip()
+    title = str(data.get("title", "申论批改结果") or "申论批改结果").strip()
+    export_format = str(data.get("format", "docx") or "docx").lower()
+    if not answer:
+        return jsonify({"error": "没有可导出的批改结果"}), 400
+    if export_format not in {"docx", "pdf"}:
+        return jsonify({"error": "仅支持 Word 或 PDF"}), 400
+
+    safe_title = secure_filename(title) or "essay_review"
+    if export_format == "docx":
+        from docx import Document
+        document = Document()
+        document.add_heading(title, level=0)
+        for line in answer.splitlines():
+            clean = re.sub(r"^#{1,6}\s*", "", line).strip()
+            if not clean or clean == "---":
+                continue
+            document.add_paragraph(clean)
+        output = io.BytesIO()
+        document.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"{safe_title}.docx",
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+
+    from xml.sax.saxutils import escape
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    output = io.BytesIO()
+    document = SimpleDocTemplate(output, pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
+                                 topMargin=16 * mm, bottomMargin=16 * mm)
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("EssayBody", parent=styles["BodyText"], fontName="STSong-Light", fontSize=10,
+                          leading=16, spaceAfter=6)
+    heading = ParagraphStyle("EssayHeading", parent=body, fontSize=14, leading=22, spaceBefore=8,
+                             spaceAfter=8)
+    story = [Paragraph(escape(title), heading)]
+    for line in answer.splitlines():
+        clean = re.sub(r"^#{1,6}\s*", "", line).strip()
+        if not clean or clean == "---":
+            story.append(Spacer(1, 4))
+            continue
+        style = heading if line.lstrip().startswith("#") else body
+        story.append(Paragraph(escape(clean).replace("  ", "&nbsp;&nbsp;"), style))
+    document.build(story)
+    output.seek(0)
+    return send_file(output, as_attachment=True, download_name=f"{safe_title}.pdf", mimetype="application/pdf")
 
 
 @app.route("/api/essay/compare", methods=["POST"])

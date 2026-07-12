@@ -45,6 +45,9 @@ Page({
     paperFileName: '',
     answerText: '',
     answerImages: [],
+    referenceText: '',
+    referenceFileToken: '',
+    referenceFileName: '',
     fullReview: null,
     essayTopic: '',
     essayImage: '',
@@ -52,14 +55,23 @@ Page({
     essayExtractedText: '',
     essayAnswer: '',
     essayAnswerHtml: '',
+    uploadProgressText: '',
     reviewing: false,
     reviewMode: 'fast'
   },
 
   onShow() {
     const result = wx.getStorageSync('PAPER_UPLOAD_RESULT')
-    if (!result || result.type !== 'essay-paper') return
+    if (!result) return
     wx.removeStorageSync('PAPER_UPLOAD_RESULT')
+    if (result.type === 'essay-reference') {
+      return this.setData({
+        referenceFileToken: result.paper_id || '',
+        referenceFileName: result.filename || '已选参考答案',
+        referenceText: ''
+      })
+    }
+    if (result.type !== 'essay-paper') return
     this.setData({
       paperFilePath: '',
       paperFileToken: result.paper_id || '',
@@ -78,6 +90,7 @@ Page({
   onPaperTitleInput(e) { this.setData({ paperTitle: e.detail.value }) },
   onPaperTextInput(e) { this.setData({ paperText: e.detail.value }) },
   onAnswerInput(e) { this.setData({ answerText: e.detail.value }) },
+  onReferenceTextInput(e) { this.setData({ referenceText: e.detail.value, referenceFileToken: '' }) },
   onTopicInput(e) { this.setData({ essayTopic: e.detail.value }) },
 
   chooseAnswerImages() {
@@ -100,6 +113,12 @@ Page({
             size: file.size || 0
           }))
         })
+        files.forEach(file => wx.getImageInfo({
+          src: file.tempFilePath,
+          success: info => {
+            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
+          }
+        }))
       }
     })
   },
@@ -108,6 +127,18 @@ Page({
     const index = Number(e.currentTarget.dataset.index)
     const answerImages = this.data.answerImages.slice()
     if (Number.isInteger(index) && index >= 0) answerImages.splice(index, 1)
+    this.setData({ answerImages })
+  },
+
+  moveAnswerImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const direction = e.currentTarget.dataset.direction === 'up' ? -1 : 1
+    const target = index + direction
+    const answerImages = this.data.answerImages.slice()
+    if (index < 0 || target < 0 || target >= answerImages.length) return
+    const current = answerImages[index]
+    answerImages[index] = answerImages[target]
+    answerImages[target] = current
     this.setData({ answerImages })
   },
 
@@ -123,7 +154,11 @@ Page({
   },
 
   openLocalPaperPicker() {
-    wx.navigateTo({ url: '/pages/uploader/uploader' })
+    wx.navigateTo({ url: '/pages/uploader/uploader?kind=paper' })
+  },
+
+  openReferencePicker() {
+    wx.navigateTo({ url: '/pages/uploader/uploader?kind=reference' })
   },
 
   chooseChatPaperFile() {
@@ -164,7 +199,7 @@ Page({
       return wx.showToast({ title: '请填写文字答案或上传答案图片', icon: 'none' })
     }
 
-    this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '' })
+    this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
     wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : '整套批改中', mask: true })
     try {
       let imageAnswer = ''
@@ -172,6 +207,7 @@ Page({
         const ocrParts = []
         for (let index = 0; index < this.data.answerImages.length; index += 1) {
           const item = this.data.answerImages[index]
+          this.setData({ uploadProgressText: `正在识别答案图片 ${index + 1}/${this.data.answerImages.length}` })
           const ocr = await api.ocrEssayImage(item.path, { page: String(index + 1) })
           if (ocr.error) throw new Error(`第${index + 1}张答案图片：${userMessage(ocr.error)}`)
           if (ocr.text) ocrParts.push(`第${index + 1}页答案：\n${ocr.text}`)
@@ -184,6 +220,8 @@ Page({
         topic: this.data.paperTitle.trim(),
         paper_text: this.data.paperText.trim(),
         paper_id: this.data.paperFileToken,
+        reference_text: this.data.referenceText.trim(),
+        reference_id: this.data.referenceFileToken,
         answers: [this.data.answerText.trim(), imageAnswer].filter(Boolean).join('\n\n')
       }
       const result = this.data.paperFilePath
@@ -204,7 +242,7 @@ Page({
       wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
     } finally {
       wx.hideLoading()
-      this.setData({ reviewing: false })
+      this.setData({ reviewing: false, uploadProgressText: '' })
     }
   },
 
@@ -235,6 +273,12 @@ Page({
           essayAnswer: '',
           essayAnswerHtml: ''
         })
+        files.forEach(file => wx.getImageInfo({
+          src: file.tempFilePath,
+          success: info => {
+            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
+          }
+        }))
       }
     })
   },
@@ -249,11 +293,23 @@ Page({
     })
   },
 
+  moveEssayImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const direction = e.currentTarget.dataset.direction === 'up' ? -1 : 1
+    const target = index + direction
+    const essayImages = this.data.essayImages.slice()
+    if (index < 0 || target < 0 || target >= essayImages.length) return
+    const current = essayImages[index]
+    essayImages[index] = essayImages[target]
+    essayImages[target] = current
+    this.setData({ essayImages, essayImage: essayImages[0].path })
+  },
+
   async startEssayReview() {
     if (this.data.reviewing) return
     const images = this.data.essayImages || []
     if (!images.length) return wx.showToast({ title: '请先选择作文图片', icon: 'none' })
-    this.setData({ reviewing: true, essayExtractedText: '', essayAnswer: '', essayAnswerHtml: '' })
+    this.setData({ reviewing: true, essayExtractedText: '', essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
     wx.showLoading({ title: images.length > 1 ? '识别多页作文' : '图片批改中', mask: true })
     try {
       let data
@@ -265,6 +321,7 @@ Page({
       } else {
         const parts = []
         for (let index = 0; index < images.length; index += 1) {
+          this.setData({ uploadProgressText: `正在识别作文图片 ${index + 1}/${images.length}` })
           const ocr = await api.ocrEssayImage(images[index].path, { page: String(index + 1) })
           if (ocr.error) throw new Error(`第${index + 1}张图片：${userMessage(ocr.error)}`)
           if (ocr.text) parts.push(`第${index + 1}页作文：\n${ocr.text}`)
@@ -286,7 +343,7 @@ Page({
       wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
     } finally {
       wx.hideLoading()
-      this.setData({ reviewing: false })
+      this.setData({ reviewing: false, uploadProgressText: '' })
     }
   },
 
@@ -296,5 +353,30 @@ Page({
       data: this.data.essayAnswer,
       success() { wx.showToast({ title: '批改结果已复制', icon: 'success' }) }
     })
+  },
+
+  exportReview(e) {
+    if (!this.data.essayAnswer || this.data.reviewing) return
+    const format = e.currentTarget.dataset.format === 'pdf' ? 'pdf' : 'docx'
+    wx.showLoading({ title: '生成文件', mask: true })
+    api.exportEssay({
+      title: this.data.paperTitle || this.data.essayTopic || '申论批改结果',
+      answer: this.data.essayAnswer,
+      format
+    }).then((buffer) => {
+      const filePath = `${wx.env.USER_DATA_PATH}/essay-review.${format}`
+      wx.getFileSystemManager().writeFile({
+        filePath,
+        data: buffer,
+        success: () => wx.openDocument({
+          filePath,
+          fileType: format,
+          showMenu: true,
+          fail: () => wx.showToast({ title: '文件已生成', icon: 'success' })
+        }),
+        fail: () => wx.showToast({ title: '保存失败', icon: 'none' })
+      })
+    }).catch((err) => wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' }))
+      .finally(() => wx.hideLoading())
   }
 })

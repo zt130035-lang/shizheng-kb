@@ -18,6 +18,10 @@
       <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择历年真题</button>
       <view wx:if="{{paperFileName}}" class="file-name">已选：{{paperFileName}}</view>
       <textarea class="textarea full-textarea" placeholder="粘贴材料和题目" value="{{paperText}}" bindinput="onPaperTextInput" disabled="{{reviewing}}" maxlength="30000"></textarea>
+      <view class="answer-label">参考答案（可选）</view>
+      <textarea class="textarea reference-area" placeholder="粘贴官方答案和分值" value="{{referenceText}}" bindinput="onReferenceTextInput" disabled="{{reviewing}}" maxlength="18000"></textarea>
+      <button class="btn secondary file-btn" bindtap="openReferencePicker" disabled="{{reviewing}}">选择参考答案文件</button>
+      <view wx:if="{{referenceFileName}}" class="file-name">已选：{{referenceFileName}}</view>
       <view class="answer-label">文字答案（可选）</view>
       <textarea class="textarea full-textarea answer-area" placeholder="粘贴答案，可分题填写" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>
       <button class="btn secondary file-btn" bindtap="chooseAnswerImages" disabled="{{reviewing}}">上传答案图片（最多9张）</button>
@@ -25,11 +29,12 @@
       <view wx:if="{{answerImages.length}}" class="answer-image-list">
         <view class="answer-image-item" wx:for="{{answerImages}}" wx:key="path">
           <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
+          <view class="image-order-actions"><button class="order-image-btn" data-index="{{index}}" data-direction="up" bindtap="moveAnswerImage">上移</button><button class="order-image-btn" data-index="{{index}}" data-direction="down" bindtap="moveAnswerImage">下移</button></view>
           <button class="remove-image-btn" data-index="{{index}}" bindtap="removeAnswerImage" disabled="{{reviewing}}">移除</button>
         </view>
       </view>
       <button class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
-      <view wx:if="{{reviewing}}" class="upload-tip">正在批改，请稍候。</view>
+      <view wx:if="{{reviewing}}" class="upload-tip">{{uploadProgressText || '正在批改，请稍候。'}}</view>
     </view>
 
     <view class="section card guide-card">
@@ -60,18 +65,23 @@
       <view wx:if="{{essayImages.length}}" class="answer-image-list">
         <view class="answer-image-item" wx:for="{{essayImages}}" wx:key="path">
           <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
+          <view class="image-order-actions"><button class="order-image-btn" data-index="{{index}}" data-direction="up" bindtap="moveEssayImage">上移</button><button class="order-image-btn" data-index="{{index}}" data-direction="down" bindtap="moveEssayImage">下移</button></view>
           <button class="remove-image-btn" data-index="{{index}}" bindtap="removeEssayImage" disabled="{{reviewing}}">移除</button>
         </view>
       </view>
       <button wx:if="{{essayImages.length}}" class="btn image-review-btn" bindtap="startEssayReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
-      <view wx:if="{{reviewing}}" class="upload-tip">正在批改，请稍候。</view>
+      <view wx:if="{{reviewing}}" class="upload-tip">{{uploadProgressText || '正在批改，请稍候。'}}</view>
     </view>
   </block>
 
   <view class="section card" wx:if="{{essayAnswer}}">
     <view class="result-head">
       <view class="section-title">批改结果</view>
-      <button class="mini-btn" bindtap="copyEssayAnswer">复制</button>
+      <view class="result-actions">
+        <button class="mini-btn" data-format="docx" bindtap="exportReview">Word</button>
+        <button class="mini-btn" data-format="pdf" bindtap="exportReview">PDF</button>
+        <button class="mini-btn" bindtap="copyEssayAnswer">复制</button>
+      </view>
     </view>
     <view class="divider"></view>
     <view wx:if="{{fullReview && fullReview.overview}}" class="score-summary">

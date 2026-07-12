@@ -19,8 +19,8 @@
 </head>
 <body>
   <main>
-    <h1>选择历年真题</h1>
-    <p>选择 PDF、Word、TXT 或 Markdown 文件。</p>
+    <h1 id="title">选择历年真题</h1>
+    <p id="hint">选择 PDF、Word、TXT 或 Markdown 文件。</p>
     <section class="panel">
       <label for="paper">选择文件</label>
       <input id="paper" type="file" accept=".pdf,.docx,.txt,.md,application/pdf,text/plain,text/markdown">
@@ -30,6 +30,11 @@
   <script>
     const input = document.getElementById('paper')
     const status = document.getElementById('status')
+    const kind = new URLSearchParams(location.search).get('kind') === 'reference' ? 'reference' : 'paper'
+    if (kind === 'reference') {
+      document.getElementById('title').textContent = '选择参考答案'
+      document.getElementById('hint').textContent = '选择官方答案或分值文件。'
+    }
     function finish(data) {
       if (window.wx && wx.miniProgram) {
         wx.miniProgram.postMessage({ data })
@@ -55,7 +60,7 @@
         const response = await fetch('/api/essay/paper-upload', { method: 'POST', body: form })
         const data = await response.json()
         if (!response.ok || data.error) throw new Error(data.error || '文件解析失败')
-        finish({ type: 'essay-paper', paper_id: data.paper_id, filename: data.filename, chars: data.chars })
+        finish({ type: `essay-${kind}`, paper_id: data.paper_id, filename: data.filename, chars: data.chars })
       } catch (error) {
         status.className = 'error'
         status.textContent = error.message || '文件解析失败，请重试。'

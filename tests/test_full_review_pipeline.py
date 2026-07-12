@@ -44,6 +44,7 @@ def test_full_review_from_text_returns_structured_result():
             "topic": "某省公务员考试",
             "paper_text": "材料一……\n第1题：概括问题。",
             "answers": "第1题：基层服务不足。",
+            "reference_text": "第1题参考答案：基层服务供给不足（10分）。",
         })
 
     assert response.status_code == 200
@@ -55,6 +56,8 @@ def test_full_review_from_text_returns_structured_result():
     assert "材料一" in prompt
     assert "基层服务不足" in prompt
     assert "申论规则" in prompt
+    assert "官方参考答案与分值" in prompt
+    assert body["has_reference"] is True
 
 
 def test_full_review_accepts_uploaded_document():
