@@ -48,6 +48,8 @@ Page({
     fullReview: null,
     essayTopic: '',
     essayImage: '',
+    essayImages: [],
+    essayExtractedText: '',
     essayAnswer: '',
     essayAnswerHtml: '',
     reviewing: false,
@@ -216,39 +218,76 @@ Page({
     if (this.data.reviewing) return wx.showToast({ title: '正在识别，请稍候', icon: 'none' })
     const source = e.currentTarget.dataset.source === 'camera' ? ['camera'] : ['album']
     wx.chooseMedia({
-      count: 1,
+      count: source[0] === 'camera' ? 1 : 9,
       mediaType: ['image'],
       sourceType: source,
       sizeType: ['compressed'],
-      success: async (res) => {
-        const file = res.tempFiles && res.tempFiles[0]
-        if (!file || !file.tempFilePath) return
-        if (file.size && file.size > 5 * 1024 * 1024) {
-          return wx.showToast({ title: '图片超过5MB，请裁剪后上传', icon: 'none' })
+      success: (res) => {
+        const files = (res.tempFiles || []).slice(0, 9)
+        if (!files.length) return
+        if (files.some(file => file.size && file.size > 5 * 1024 * 1024)) {
+          return wx.showToast({ title: '单张图片超过5MB，请裁剪后上传', icon: 'none' })
         }
-
-        this.setData({ reviewing: true, essayImage: file.tempFilePath, essayAnswer: '', essayAnswerHtml: '' })
-        wx.showLoading({ title: this.data.reviewMode === 'deep' ? '深度批改中' : '快速批改中', mask: true })
-        try {
-          const data = await api.reviewEssayImage(file.tempFilePath, {
-            topic: this.data.essayTopic || '',
-            mode: this.data.reviewMode
-          })
-          if (data.error) {
-            wx.showToast({ title: userMessage(data.error).slice(0, 28), icon: 'none' })
-            return
-          }
-          const answer = data.answer || ''
-          this.setData({ essayAnswer: answer, essayAnswerHtml: safeHtml(data.html || answer) })
-          if (answer) saveRecord(this.data.essayTopic, answer)
-        } catch (err) {
-          wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
-        } finally {
-          wx.hideLoading()
-          this.setData({ reviewing: false })
-        }
+        this.setData({
+          essayImage: files[0].tempFilePath,
+          essayImages: files.map(file => ({ path: file.tempFilePath, name: file.name || '作文图片', size: file.size || 0 })),
+          essayExtractedText: '',
+          essayAnswer: '',
+          essayAnswerHtml: ''
+        })
       }
     })
+  },
+
+  removeEssayImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const essayImages = this.data.essayImages.slice()
+    if (Number.isInteger(index) && index >= 0) essayImages.splice(index, 1)
+    this.setData({
+      essayImages,
+      essayImage: essayImages.length ? essayImages[0].path : ''
+    })
+  },
+
+  async startEssayReview() {
+    if (this.data.reviewing) return
+    const images = this.data.essayImages || []
+    if (!images.length) return wx.showToast({ title: '请先选择作文图片', icon: 'none' })
+    this.setData({ reviewing: true, essayExtractedText: '', essayAnswer: '', essayAnswerHtml: '' })
+    wx.showLoading({ title: images.length > 1 ? '识别多页作文' : '图片批改中', mask: true })
+    try {
+      let data
+      if (images.length === 1) {
+        data = await api.reviewEssayImage(images[0].path, {
+          topic: this.data.essayTopic || '',
+          mode: this.data.reviewMode
+        })
+      } else {
+        const parts = []
+        for (let index = 0; index < images.length; index += 1) {
+          const ocr = await api.ocrEssayImage(images[index].path, { page: String(index + 1) })
+          if (ocr.error) throw new Error(`第${index + 1}张图片：${userMessage(ocr.error)}`)
+          if (ocr.text) parts.push(`第${index + 1}页作文：\n${ocr.text}`)
+        }
+        const essay = parts.join('\n\n')
+        if (essay.length < 50) throw new Error('多张图片未识别出足够文字，请上传更清晰的照片')
+        this.setData({ essayExtractedText: essay })
+        wx.showLoading({ title: '整合多页并批改', mask: true })
+        data = await api.reviewEssayText({ topic: this.data.essayTopic || '', essay })
+      }
+      if (data.error) {
+        wx.showToast({ title: userMessage(data.error).slice(0, 28), icon: 'none' })
+        return
+      }
+      const answer = data.answer || ''
+      this.setData({ essayAnswer: answer, essayAnswerHtml: safeHtml(data.html || answer) })
+      if (answer) saveRecord(this.data.essayTopic, answer)
+    } catch (err) {
+      wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
+    } finally {
+      wx.hideLoading()
+      this.setData({ reviewing: false })
+    }
   },
 
   copyEssayAnswer() {

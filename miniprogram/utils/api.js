@@ -3,6 +3,7 @@ const { uploadTo, postJson } = require('./request')
 module.exports = {
   reviewEssayImage: (path, data) => uploadTo('/api/essay/image-review', path, data || {}, 'file', 240000),
   ocrEssayImage: (path, data) => uploadTo('/api/essay/ocr-image', path, data || {}, 'file', 240000),
+  reviewEssayText: (data) => postJson('/api/essay/review', data || {}, 240000),
   reviewEssaySet: (path, data) => uploadTo('/api/essay/full-review', path, data || {}, 'file', 240000),
   reviewEssaySetText: (data) => postJson('/api/essay/full-review', data || {}, 240000)
 }

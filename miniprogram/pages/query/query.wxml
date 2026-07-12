@@ -53,11 +53,18 @@
         <button class="mode-option {{reviewMode=='deep'?'active':''}}" data-mode="deep" bindtap="setReviewMode" disabled="{{reviewing}}">深度批改</button>
       </view>
       <view class="upload-actions">
-        <button class="btn upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="camera">{{reviewing?'识别中':'拍照上传'}}</button>
-        <button class="btn secondary upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">{{reviewing?'请稍候':'相册选择'}}</button>
+        <button class="btn upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="camera">拍照添加</button>
+        <button class="btn secondary upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">相册选择多张</button>
       </view>
+      <view wx:if="{{essayImages.length}}" class="answer-image-meta">已选择 {{essayImages.length}} 张作文图片，系统会按顺序合并。</view>
+      <view wx:if="{{essayImages.length}}" class="answer-image-list">
+        <view class="answer-image-item" wx:for="{{essayImages}}" wx:key="path">
+          <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
+          <button class="remove-image-btn" data-index="{{index}}" bindtap="removeEssayImage" disabled="{{reviewing}}">移除</button>
+        </view>
+      </view>
+      <button wx:if="{{essayImages.length}}" class="btn image-review-btn" bindtap="startEssayReview" disabled="{{reviewing}}">{{reviewing?'图片批改中':'开始图片批改'}}</button>
       <view wx:if="{{reviewing}}" class="upload-tip">正在识别和批改，请不要重复点击或退出页面。</view>
-      <image wx:if="{{essayImage}}" class="essay-preview" src="{{essayImage}}" mode="aspectFill"></image>
     </view>
   </block>
 
