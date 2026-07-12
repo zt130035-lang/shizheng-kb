@@ -1,5 +1,10 @@
 .essay-hero{padding-bottom:26rpx}
 .essay-preview{width:100%;height:360rpx;margin-top:20rpx;border-radius:24rpx;background:#ede7da}
+.kind-switch{margin-top:24rpx}
+.file-btn{margin-top:18rpx}
+.file-name{margin-top:14rpx;color:#1f4d3a;font-size:24rpx;line-height:1.5;word-break:break-all}
+.full-textarea{min-height:300rpx;margin-top:18rpx}
+.answer-area{min-height:360rpx}
 .mode-title{margin-top:22rpx;color:#293b32;font-size:26rpx;font-weight:600}
 .mode-switch{display:flex;gap:12rpx;margin-top:12rpx}
 .mode-option{flex:1;margin:0;padding:0;height:68rpx;line-height:68rpx;border:2rpx solid #d8d3c7;border-radius:14rpx;background:#fffdf7;color:#667169;font-size:25rpx}
@@ -12,5 +17,8 @@
 .upload-tip{margin-top:16rpx;color:#8b8173;font-size:24rpx;line-height:1.55}
 .result-head{display:flex;align-items:center;justify-content:space-between;gap:16rpx}
 .mini-btn{margin:0;padding:0 20rpx;min-height:58rpx;line-height:58rpx;border-radius:18rpx;background:#ede7da;color:#1f4d3a;font-size:24rpx}
+.score-summary{display:flex;align-items:baseline;gap:14rpx;padding:18rpx 20rpx;margin-bottom:20rpx;border-radius:18rpx;background:#eef4ec}
+.score-number{font-size:48rpx;font-weight:850;color:#1f4d3a}
+.score-label{color:#58645d;font-size:24rpx}
 .guide-card{background:#fffaf0}
 .tip-line{font-size:25rpx;color:#58645d;line-height:1.75;margin:8rpx 0}

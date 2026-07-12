@@ -822,6 +822,59 @@ def _parse_json_loose(text: str):
     return None
 
 
+def _full_review_markdown(report: dict) -> str:
+    """Render the structured full-paper review into stable Markdown for clients."""
+    overview = report.get("overview") or {}
+    lines = ["## 申论整套批改结果", ""]
+    total = overview.get("total_score", "未给出")
+    maximum = overview.get("total_score_max", "")
+    score = f"{total}/{maximum}" if maximum else str(total)
+    lines.extend([f"**总评估分：{score}**", ""])
+    if overview.get("overall"):
+        lines.extend(["## 总体评价", str(overview["overall"]), ""])
+    if overview.get("scoring_note"):
+        lines.extend([f"> [!warning] 评分说明\n> {overview['scoring_note']}", ""])
+
+    questions = report.get("questions") or []
+    for index, item in enumerate(questions, 1):
+        question_id = item.get("id") or index
+        title = item.get("task") or item.get("type") or "小题"
+        q_score = item.get("score", "未给出")
+        q_max = item.get("max_score", "")
+        q_score_text = f"{q_score}/{q_max}" if q_max else str(q_score)
+        lines.extend([f"## 第{question_id}题：{title}", f"**得分：{q_score_text}**", ""])
+        if item.get("type"):
+            lines.append(f"题型：{item['type']}")
+        if item.get("score_reason"):
+            lines.extend([f"评分依据：{item['score_reason']}", ""])
+        points = item.get("key_points") or []
+        if points:
+            lines.extend(["### 材料要点核对", "| 材料要点 | 作答状态 | 依据与说明 |", "|---|---|---|"])
+            for point in points:
+                if isinstance(point, str):
+                    lines.append(f"| {point} | 未结构化 | |")
+                    continue
+                lines.append(
+                    f"| {point.get('point', '')} | {point.get('status', '未判断')} | "
+                    f"{point.get('comment', point.get('evidence', ''))} |"
+                )
+            lines.append("")
+        for label, key in (("答案评价", "answer_evaluation"), ("主要问题", "problems"),
+                           ("修改建议", "modification"), ("参考修改答案", "suggested_answer")):
+            value = item.get(key)
+            if isinstance(value, list):
+                value = "；".join(str(v) for v in value)
+            if value:
+                lines.extend([f"### {label}", str(value), ""])
+
+    fixes = overview.get("priority_fixes") or report.get("priority_fixes") or []
+    if fixes:
+        lines.extend(["## 优先修改事项"])
+        lines.extend([f"{index}. {value}" for index, value in enumerate(fixes, 1)])
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def sanitize_collection_name(name: str) -> str:
     """将用户输入的名称转为ChromaDB合法集合名
     ChromaDB要求: 3-512字符, [a-zA-Z0-9._-], 首尾必须是[a-zA-Z0-9]
@@ -2450,6 +2503,151 @@ def essay_extract_topic():
         })
     parsed["raw_len"] = len(raw_text)
     return jsonify(parsed)
+
+
+@app.route("/api/essay/full-review", methods=["POST"])
+def essay_full_review():
+    """Review a complete essay paper: material, prompts and candidate answers."""
+    data = request.get_json(silent=True) if request.is_json else request.form
+    data = data or {}
+    uploaded = request.files.get("file") or request.files.get("paper_file")
+    paper_text = str(data.get("paper_text", "") or "").strip()
+    source = "text"
+    temporary_path = ""
+
+    if uploaded and uploaded.filename:
+        original_name = uploaded.filename
+        if not original_name.lower().endswith((".pdf", ".docx", ".txt", ".md")):
+            return jsonify({"error": "整套试卷仅支持 PDF、Word(.docx)、TXT 或 Markdown 文件"}), 400
+        if request.content_length and request.content_length > 25 * 1024 * 1024:
+            return jsonify({"error": "上传文件不能超过25MB"}), 413
+        safe_name = secure_filename(original_name) or "essay_paper"
+        temporary_path = os.path.join(
+            PDF_UPLOADS_DIR,
+            f"essay_full_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+        )
+        uploaded.save(temporary_path)
+        try:
+            paper_text = extract_document_text(temporary_path, original_name).strip()
+            source = "file"
+        except Exception as exc:
+            return jsonify({"error": f"整套试卷解析失败: {exc}"}), 400
+        finally:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+
+    answers = data.get("answers", "")
+    if isinstance(answers, (dict, list)):
+        answers = json.dumps(answers, ensure_ascii=False)
+    answers = str(answers or "").strip()
+    topic = str(data.get("topic", "") or "").strip()
+
+    if not paper_text:
+        return jsonify({"error": "请上传或粘贴申论材料与题目"}), 400
+    if not answers:
+        return jsonify({"error": "请填写各题作答内容，建议按第1题、第2题分段"}), 400
+
+    # Keep a complete enough context for ordinary national/provincial exam papers,
+    # while avoiding an unbounded request from a scanned or duplicated document.
+    paper_limit = 30000
+    answer_limit = 20000
+    paper_truncated = len(paper_text) > paper_limit
+    answer_truncated = len(answers) > answer_limit
+    paper_for_prompt = paper_text[:paper_limit]
+    answers_for_prompt = answers[:answer_limit]
+    retrieval_text = "\n".join([topic, paper_for_prompt[:1200], answers_for_prompt[:800]]).strip()
+    kb_materials = _search_kb_for_essay(retrieval_text, top_k=8, use_rerank=True)
+
+    prompt = f"""请批改一整套申论试卷，必须同时依据【试卷材料与题目】、【考生作答】和【申论知识库规则】完成逐题评分与修改。
+
+【试卷材料与题目】
+{paper_for_prompt}
+
+【考生作答】
+{answers_for_prompt}
+
+【申论知识库规则与参考内容】
+{kb_materials or '未检索到额外内容，请依据通用申论评分原则，并明确说明依据不足。'}
+
+请完成以下任务：
+1. 识别整套试卷包含的题目，判断每题题型（概括归纳、综合分析、提出对策、应用文、大作文或其他）。
+2. 逐题从材料中提炼可核对的要点，逐项判断考生答案是“命中”“部分命中”“未命中”或“材料外”。
+3. 按题目分值给出估算分、得分理由、失分点和可执行的修改动作。没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。
+4. 给出每道题的参考修改答案；大作文则给出立意、结构和关键段落的修改方向，不要无依据杜撰材料事实。
+5. 给出整套优先提分事项。
+
+只输出合法 JSON，不要 Markdown 代码块，不要额外解释，结构必须符合：
+{{
+  "overview": {{
+    "total_score": 0,
+    "total_score_max": 0,
+    "overall": "",
+    "scoring_note": "",
+    "priority_fixes": []
+  }},
+  "questions": [
+    {{
+      "id": "1",
+      "type": "",
+      "task": "",
+      "score": 0,
+      "max_score": 0,
+      "score_reason": "",
+      "key_points": [
+        {{"point": "材料要点", "status": "命中/部分命中/未命中/材料外", "evidence": "材料依据", "comment": "核对说明"}}
+      ],
+      "answer_evaluation": "",
+      "problems": [],
+      "modification": "",
+      "suggested_answer": ""
+    }}
+  ]
+}}"""
+    system = "你是严谨的国考、省考申论阅卷教师。必须先建立材料证据链，再评分和修改；不能把常识或知识库素材冒充题目材料要点。只输出合法JSON。"
+    answer = call_deepseek(prompt, system)
+    if not answer or answer.lstrip().startswith("AI调用失败:"):
+        return jsonify({"error": answer or "AI未返回批改结果"}), 502
+
+    report = _parse_json_loose(answer)
+    if not isinstance(report, dict):
+        # Preserve the raw response so a provider formatting issue does not hide
+        # the result from the user; the next request can still be retried.
+        report = {
+            "overview": {
+                "total_score": "未解析",
+                "total_score_max": "",
+                "overall": "AI已返回批改内容，但结构化结果解析失败。",
+                "scoring_note": "请查看原始结果，建议重新提交一次。",
+                "priority_fixes": [],
+            },
+            "questions": [],
+            "raw_answer": answer,
+        }
+        rendered = answer
+    else:
+        if not isinstance(report.get("overview"), dict):
+            report["overview"] = {}
+        if not isinstance(report.get("questions"), list):
+            report["questions"] = []
+        rendered = _full_review_markdown(report)
+
+    if paper_truncated or answer_truncated:
+        note = "输入内容较长，已截取部分文本参与本次批改；建议拆分试卷后复核。"
+        report.setdefault("overview", {})["truncation_note"] = note
+        rendered = f"> [!warning] {note}\n\n{rendered}"
+
+    html = markdown.markdown(rendered, extensions=["tables", "fenced_code"])
+    return jsonify({
+        "answer": rendered,
+        "html": html,
+        "report": report,
+        "has_kb_materials": bool(kb_materials),
+        "paper_chars": len(paper_text),
+        "answer_chars": len(answers),
+        "source": source,
+    })
 
 
 @app.route("/api/essay/compare", methods=["POST"])

@@ -12,8 +12,8 @@ function userMessage(err) {
   if (msg.includes('额度') || msg.includes('insufficient') || msg.includes('余额')) return 'AI额度不足，请稍后再试'
   if (msg.includes('401')) return 'AI服务认证失败'
   if (msg.includes('403')) return 'AI模型暂无权限'
-  if (msg.includes('timeout') || msg.includes('超时')) return '识别耗时较长，请稍后重试'
-  if (msg.includes('413') || msg.includes('过大')) return '图片过大，请裁剪后上传'
+  if (msg.includes('413') || msg.includes('过大')) return '文件过大，请控制在25MB以内'
+  if (msg.includes('timeout') || msg.includes('超时')) return '处理耗时较长，请稍后重试'
   return msg || '处理失败，请稍后重试'
 }
 
@@ -37,6 +37,13 @@ function saveRecord(topic, answer) {
 
 Page({
   data: {
+    reviewKind: 'full',
+    paperTitle: '',
+    paperText: '',
+    paperFilePath: '',
+    paperFileName: '',
+    answerText: '',
+    fullReview: null,
     essayTopic: '',
     essayImage: '',
     essayAnswer: '',
@@ -45,8 +52,83 @@ Page({
     reviewMode: 'fast'
   },
 
-  onTopicInput(e) {
-    this.setData({ essayTopic: e.detail.value })
+  setReviewKind(e) {
+    if (this.data.reviewing) return
+    const kind = e.currentTarget.dataset.kind === 'image' ? 'image' : 'full'
+    this.setData({ reviewKind: kind })
+  },
+
+  onPaperTitleInput(e) { this.setData({ paperTitle: e.detail.value }) },
+  onPaperTextInput(e) { this.setData({ paperText: e.detail.value }) },
+  onAnswerInput(e) { this.setData({ answerText: e.detail.value }) },
+  onTopicInput(e) { this.setData({ essayTopic: e.detail.value }) },
+
+  choosePaperFile() {
+    if (this.data.reviewing) return
+    if (!wx.chooseMessageFile) {
+      return wx.showToast({ title: '当前微信版本不支持文件选择', icon: 'none' })
+    }
+    wx.chooseMessageFile({
+      count: 1,
+      type: 'file',
+      extension: ['pdf', 'docx', 'txt', 'md'],
+      success: (res) => {
+        const file = res.tempFiles && res.tempFiles[0]
+        if (!file || !file.path) return
+        if (file.size && file.size > 25 * 1024 * 1024) {
+          return wx.showToast({ title: '文件超过25MB', icon: 'none' })
+        }
+        this.setData({
+          paperFilePath: file.path,
+          paperFileName: file.name || '已选择整套试卷',
+          fullReview: null
+        })
+      },
+      fail: (err) => {
+        if (!String(err && err.errMsg || '').includes('cancel')) {
+          wx.showToast({ title: '未能选择文件', icon: 'none' })
+        }
+      }
+    })
+  },
+
+  async submitFullReview() {
+    if (this.data.reviewing) return
+    if (!this.data.paperFilePath && this.data.paperText.trim().length < 20) {
+      return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
+    }
+    if (this.data.answerText.trim().length < 2) {
+      return wx.showToast({ title: '请填写各题作答内容', icon: 'none' })
+    }
+
+    this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '' })
+    wx.showLoading({ title: '整套批改中', mask: true })
+    try {
+      const payload = {
+        topic: this.data.paperTitle.trim(),
+        paper_text: this.data.paperText.trim(),
+        answers: this.data.answerText.trim()
+      }
+      const result = this.data.paperFilePath
+        ? await api.reviewEssaySet(this.data.paperFilePath, payload)
+        : await api.reviewEssaySetText(payload)
+      if (result.error) {
+        wx.showToast({ title: userMessage(result.error).slice(0, 28), icon: 'none' })
+        return
+      }
+      const answer = result.answer || ''
+      this.setData({
+        fullReview: result.report || null,
+        essayAnswer: answer,
+        essayAnswerHtml: safeHtml(result.html || answer)
+      })
+      if (answer) saveRecord(this.data.paperTitle || '申论整套批改', answer)
+    } catch (err) {
+      wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
+    } finally {
+      wx.hideLoading()
+      this.setData({ reviewing: false })
+    }
   },
 
   setReviewMode(e) {
@@ -70,12 +152,7 @@ Page({
           return wx.showToast({ title: '图片超过5MB，请裁剪后上传', icon: 'none' })
         }
 
-        this.setData({
-          reviewing: true,
-          essayImage: file.tempFilePath,
-          essayAnswer: '',
-          essayAnswerHtml: ''
-        })
+        this.setData({ reviewing: true, essayImage: file.tempFilePath, essayAnswer: '', essayAnswerHtml: '' })
         wx.showLoading({ title: this.data.reviewMode === 'deep' ? '深度批改中' : '快速批改中', mask: true })
         try {
           const data = await api.reviewEssayImage(file.tempFilePath, {
@@ -87,12 +164,10 @@ Page({
             return
           }
           const answer = data.answer || ''
-          const html = safeHtml(data.html || answer || '')
-          this.setData({
-            essayAnswer: answer,
-            essayAnswerHtml: html
-          })
+          this.setData({ essayAnswer: answer, essayAnswerHtml: safeHtml(data.html || answer) })
           if (answer) saveRecord(this.data.essayTopic, answer)
+        } catch (err) {
+          wx.showToast({ title: userMessage(err).slice(0, 28), icon: 'none' })
         } finally {
           wx.hideLoading()
           this.setData({ reviewing: false })

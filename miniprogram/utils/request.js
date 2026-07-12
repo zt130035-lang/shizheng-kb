@@ -41,4 +41,28 @@ function uploadTo(url, path, formData = {}, name = 'file', timeout = 180000) {
   })
 }
 
-module.exports = { uploadTo, getBaseUrl, DEFAULT_BASE_URL }
+function postJson(url, data = {}, timeout = 180000) {
+  const fullUrl = /^https?:\/\//.test(url) ? url : getBaseUrl() + url
+  console.log('[request start]', fullUrl)
+  return new Promise((resolve) => {
+    wx.request({
+      url: fullUrl,
+      method: 'POST',
+      data,
+      timeout,
+      header: { 'content-type': 'application/json' },
+      success(res) {
+        const body = res.data || {}
+        if (res.statusCode >= 200 && res.statusCode < 300) return resolve(body)
+        resolve({ error: body.error || body.message || `请求失败 ${res.statusCode}` })
+      },
+      fail(err) {
+        const errMsg = err && err.errMsg ? err.errMsg : 'request fail'
+        console.warn('[request fail]', fullUrl, errMsg)
+        resolve({ error: String(errMsg).toLowerCase().includes('timeout') ? '请求超时' : '网络请求失败' })
+      }
+    })
+  })
+}
+
+module.exports = { uploadTo, postJson, getBaseUrl, DEFAULT_BASE_URL }
