@@ -3,6 +3,7 @@ const { uploadTo, postJson, getBaseUrl } = require('./request')
 module.exports = {
   reviewEssayImage: (path, data) => uploadTo('/api/essay/image-review', path, data || {}, 'file', 240000),
   ocrEssayImage: (path, data) => uploadTo('/api/essay/ocr-image', path, data || {}, 'file', 240000),
+  uploadPaperFile: (path) => uploadTo('/api/essay/paper-upload', path, {}, 'file', 180000),
   reviewEssayText: (data) => postJson('/api/essay/review', data || {}, 240000),
   exportEssay: (data) => new Promise((resolve, reject) => {
     wx.request({

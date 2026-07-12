@@ -12,15 +12,23 @@
   <block wx:if="{{reviewKind=='full'}}">
     <view class="section card">
       <view class="section-title">历年真题</view>
-      <view class="card-meta">支持手机文件、聊天文件或粘贴文本。</view>
+      <view class="card-meta">支持相册图片、拍照、聊天文件或粘贴文本。PDF/Word 请先发到文件传输助手。</view>
       <view class="divider"></view>
       <input class="input" placeholder="考试名称（可选）" value="{{paperTitle}}" bindinput="onPaperTitleInput" disabled="{{reviewing}}" />
-      <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择历年真题</button>
+      <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择材料</button>
       <view wx:if="{{paperFileName}}" class="file-name">已选：{{paperFileName}}</view>
+      <view wx:if="{{materialImages.length}}" class="answer-image-meta">已选 {{materialImages.length}} 张材料图，按顺序识别。</view>
+      <view wx:if="{{materialImages.length}}" class="answer-image-list">
+        <view class="answer-image-item" wx:for="{{materialImages}}" wx:key="path">
+          <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
+          <view class="image-order-actions"><button class="order-image-btn" data-index="{{index}}" data-direction="up" bindtap="moveMaterialImage">上移</button><button class="order-image-btn" data-index="{{index}}" data-direction="down" bindtap="moveMaterialImage">下移</button></view>
+          <button class="remove-image-btn" data-index="{{index}}" bindtap="removeMaterialImage" disabled="{{reviewing}}">移除</button>
+        </view>
+      </view>
       <textarea class="textarea full-textarea" placeholder="粘贴材料和题目" value="{{paperText}}" bindinput="onPaperTextInput" disabled="{{reviewing}}" maxlength="30000"></textarea>
       <view class="answer-label">参考答案（可选）</view>
       <textarea class="textarea reference-area" placeholder="粘贴官方答案和分值" value="{{referenceText}}" bindinput="onReferenceTextInput" disabled="{{reviewing}}" maxlength="18000"></textarea>
-      <button class="btn secondary file-btn" bindtap="openReferencePicker" disabled="{{reviewing}}">选择参考答案文件</button>
+      <button class="btn secondary file-btn" bindtap="openReferencePicker" disabled="{{reviewing}}">选择聊天文件</button>
       <view wx:if="{{referenceFileName}}" class="file-name">已选：{{referenceFileName}}</view>
       <view class="answer-label">文字答案（可选）</view>
       <textarea class="textarea full-textarea answer-area" placeholder="粘贴答案，可分题填写" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>

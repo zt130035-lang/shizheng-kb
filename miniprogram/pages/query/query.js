@@ -45,6 +45,7 @@ Page({
     paperFileName: '',
     answerText: '',
     answerImages: [],
+    materialImages: [],
     referenceText: '',
     referenceFileToken: '',
     referenceFileName: '',
@@ -145,20 +146,61 @@ Page({
   choosePaperFile() {
     if (this.data.reviewing) return
     wx.showActionSheet({
-      itemList: ['手机本地文件', '微信聊天文件'],
+      itemList: ['相册图片', '拍照图片', '微信聊天文件'],
       success: (res) => {
-        if (res.tapIndex === 0) return this.openLocalPaperPicker()
+        if (res.tapIndex === 0) return this.chooseMaterialImages(['album'])
+        if (res.tapIndex === 1) return this.chooseMaterialImages(['camera'])
         this.chooseChatPaperFile()
       }
     })
   },
 
-  openLocalPaperPicker() {
-    wx.navigateTo({ url: '/pages/uploader/uploader?kind=paper' })
+  chooseMaterialImages(source) {
+    wx.chooseMedia({
+      count: source[0] === 'camera' ? 1 : 9,
+      mediaType: ['image'],
+      sourceType: source,
+      sizeType: ['compressed'],
+      success: (res) => {
+        const files = (res.tempFiles || []).slice(0, 9)
+        if (!files.length) return
+        if (files.some(file => file.size && file.size > 7 * 1024 * 1024)) return wx.showToast({ title: '单张材料图片不能超过7MB', icon: 'none' })
+        this.setData({
+          paperFilePath: '',
+          paperFileToken: '',
+          paperFileName: '',
+          materialImages: files.map(file => ({ path: file.tempFilePath, name: file.name || '材料图片', size: file.size || 0 }))
+        })
+        files.forEach(file => wx.getImageInfo({
+          src: file.tempFilePath,
+          success: info => {
+            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
+          }
+        }))
+      }
+    })
+  },
+
+  removeMaterialImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const materialImages = this.data.materialImages.slice()
+    if (Number.isInteger(index) && index >= 0) materialImages.splice(index, 1)
+    this.setData({ materialImages })
+  },
+
+  moveMaterialImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const target = index + (e.currentTarget.dataset.direction === 'up' ? -1 : 1)
+    const materialImages = this.data.materialImages.slice()
+    if (index < 0 || target < 0 || target >= materialImages.length) return
+    const current = materialImages[index]
+    materialImages[index] = materialImages[target]
+    materialImages[target] = current
+    this.setData({ materialImages })
   },
 
   openReferencePicker() {
-    wx.navigateTo({ url: '/pages/uploader/uploader?kind=reference' })
+    this.chooseChatReferenceFile()
   },
 
   chooseChatPaperFile() {
@@ -179,6 +221,7 @@ Page({
           paperFilePath: file.path,
           paperFileToken: '',
           paperFileName: file.name || '已选择整套试卷',
+          materialImages: [],
           fullReview: null
         })
       },
@@ -190,9 +233,31 @@ Page({
     })
   },
 
+  chooseChatReferenceFile() {
+    if (!wx.chooseMessageFile) return wx.showToast({ title: '当前版本不支持聊天文件', icon: 'none' })
+    wx.chooseMessageFile({
+      count: 1,
+      type: 'file',
+      extension: ['pdf', 'docx', 'txt', 'md'],
+      success: async (res) => {
+        const file = res.tempFiles && res.tempFiles[0]
+        if (!file || !file.path) return
+        if (file.size && file.size > 25 * 1024 * 1024) return wx.showToast({ title: '文件超过25MB', icon: 'none' })
+        wx.showLoading({ title: '读取参考答案', mask: true })
+        try {
+          const result = await api.uploadPaperFile(file.path)
+          if (result.error) return wx.showToast({ title: userMessage(result.error).slice(0, 28), icon: 'none' })
+          this.setData({ referenceFileToken: result.paper_id || '', referenceFileName: file.name || '已选参考答案', referenceText: '' })
+        } finally {
+          wx.hideLoading()
+        }
+      }
+    })
+  },
+
   async submitFullReview() {
     if (this.data.reviewing) return
-    if (!this.data.paperFilePath && !this.data.paperFileToken && this.data.paperText.trim().length < 20) {
+    if (!this.data.paperFilePath && !this.data.paperFileToken && !this.data.materialImages.length && this.data.paperText.trim().length < 20) {
       return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
     }
     if (this.data.answerText.trim().length < 2 && !this.data.answerImages.length) {
@@ -202,6 +267,17 @@ Page({
     this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
     wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : '整套批改中', mask: true })
     try {
+      let imageMaterial = ''
+      if (this.data.materialImages.length) {
+        const materialParts = []
+        for (let index = 0; index < this.data.materialImages.length; index += 1) {
+          this.setData({ uploadProgressText: `正在识别材料图片 ${index + 1}/${this.data.materialImages.length}` })
+          const ocr = await api.ocrEssayImage(this.data.materialImages[index].path, { page: String(index + 1) })
+          if (ocr.error) throw new Error(`第${index + 1}张材料图片：${userMessage(ocr.error)}`)
+          if (ocr.text) materialParts.push(`第${index + 1}页材料：\n${ocr.text}`)
+        }
+        imageMaterial = materialParts.join('\n\n')
+      }
       let imageAnswer = ''
       if (this.data.answerImages.length) {
         const ocrParts = []
@@ -218,7 +294,7 @@ Page({
       }
       const payload = {
         topic: this.data.paperTitle.trim(),
-        paper_text: this.data.paperText.trim(),
+        paper_text: [this.data.paperText.trim(), imageMaterial].filter(Boolean).join('\n\n'),
         paper_id: this.data.paperFileToken,
         reference_text: this.data.referenceText.trim(),
         reference_id: this.data.referenceFileToken,
