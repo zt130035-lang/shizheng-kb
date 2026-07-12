@@ -43,6 +43,7 @@ Page({
     paperFilePath: '',
     paperFileName: '',
     answerText: '',
+    answerImages: [],
     fullReview: null,
     essayTopic: '',
     essayImage: '',
@@ -62,6 +63,37 @@ Page({
   onPaperTextInput(e) { this.setData({ paperText: e.detail.value }) },
   onAnswerInput(e) { this.setData({ answerText: e.detail.value }) },
   onTopicInput(e) { this.setData({ essayTopic: e.detail.value }) },
+
+  chooseAnswerImages() {
+    if (this.data.reviewing) return
+    wx.chooseMedia({
+      count: 9,
+      mediaType: ['image'],
+      sourceType: ['album'],
+      sizeType: ['compressed'],
+      success: (res) => {
+        const files = (res.tempFiles || []).slice(0, 9)
+        if (!files.length) return
+        if (files.some(file => file.size && file.size > 7 * 1024 * 1024)) {
+          return wx.showToast({ title: '单张答案图片不能超过7MB', icon: 'none' })
+        }
+        this.setData({
+          answerImages: files.map(file => ({
+            path: file.tempFilePath,
+            name: file.name || '答案图片',
+            size: file.size || 0
+          }))
+        })
+      }
+    })
+  },
+
+  removeAnswerImage(e) {
+    const index = Number(e.currentTarget.dataset.index)
+    const answerImages = this.data.answerImages.slice()
+    if (Number.isInteger(index) && index >= 0) answerImages.splice(index, 1)
+    this.setData({ answerImages })
+  },
 
   choosePaperFile() {
     if (this.data.reviewing) return
@@ -97,17 +129,30 @@ Page({
     if (!this.data.paperFilePath && this.data.paperText.trim().length < 20) {
       return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
     }
-    if (this.data.answerText.trim().length < 2) {
-      return wx.showToast({ title: '请填写各题作答内容', icon: 'none' })
+    if (this.data.answerText.trim().length < 2 && !this.data.answerImages.length) {
+      return wx.showToast({ title: '请填写文字答案或上传答案图片', icon: 'none' })
     }
 
     this.setData({ reviewing: true, fullReview: null, essayAnswer: '', essayAnswerHtml: '' })
-    wx.showLoading({ title: '整套批改中', mask: true })
+    wx.showLoading({ title: this.data.answerImages.length ? '识别答案图片' : '整套批改中', mask: true })
     try {
+      let imageAnswer = ''
+      if (this.data.answerImages.length) {
+        const ocrParts = []
+        for (let index = 0; index < this.data.answerImages.length; index += 1) {
+          const item = this.data.answerImages[index]
+          const ocr = await api.ocrEssayImage(item.path, { page: String(index + 1) })
+          if (ocr.error) throw new Error(`第${index + 1}张答案图片：${userMessage(ocr.error)}`)
+          if (ocr.text) ocrParts.push(`第${index + 1}页答案：\n${ocr.text}`)
+        }
+        imageAnswer = ocrParts.join('\n\n')
+        if (!imageAnswer.trim()) throw new Error('答案图片未识别出文字，请换清晰图片重试')
+        wx.showLoading({ title: '整套批改中', mask: true })
+      }
       const payload = {
         topic: this.data.paperTitle.trim(),
         paper_text: this.data.paperText.trim(),
-        answers: this.data.answerText.trim()
+        answers: [this.data.answerText.trim(), imageAnswer].filter(Boolean).join('\n\n')
       }
       const result = this.data.paperFilePath
         ? await api.reviewEssaySet(this.data.paperFilePath, payload)

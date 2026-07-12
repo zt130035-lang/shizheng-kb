@@ -81,3 +81,21 @@ def test_full_review_requires_paper_and_answers():
     response = client.post("/api/essay/full-review", json={})
     assert response.status_code == 400
     assert "材料与题目" in response.get_json()["error"]
+
+
+def test_answer_ocr_endpoint_returns_text():
+    client = server.app.test_client()
+    with patch.object(server, "_call_vision_essay_ocr", return_value={
+        "text": "第1题：基层服务不足。",
+        "page": 2,
+        "model": "test-model",
+    }), patch("werkzeug.datastructures.FileStorage.save"):
+        response = client.post(
+            "/api/essay/ocr-image",
+            data={"page": "2", "file": (io.BytesIO(b"image"), "answer.png")},
+            content_type="multipart/form-data",
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["text"] == "第1题：基层服务不足。"
+    assert response.get_json()["page"] == 2

@@ -2731,6 +2731,91 @@ def _extract_essay_text(answer: str) -> str:
     return re.split(r"\n##\s+", extracted, maxsplit=1)[0].strip()
 
 
+def _call_vision_essay_ocr(image_path: str, page_number: int = 1) -> dict:
+    """OCR one answer image without asking the model to grade or rewrite it."""
+    import base64
+
+    ext = os.path.splitext(image_path)[1].lower()
+    mime = "image/jpeg"
+    if ext == ".png":
+        mime = "image/png"
+    elif ext == ".webp":
+        mime = "image/webp"
+
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    prompt = f"""请准确识别这张申论考生作答图片中的中文文字，这是第{page_number}页答案。
+
+要求：
+1. 保持原有行文顺序、段落和题号，不要评分、批改、润色或总结。
+2. 看不清的字使用“□”，不要根据常识补写。
+3. 只输出以下格式：
+
+## 识别原文
+[图片中的完整文字]
+"""
+    headers = {
+        "Authorization": f"Bearer {VISION_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是中文申论答题图片 OCR 助手，只负责准确识别图片文字。"},
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ]},
+        ],
+        "temperature": 0.1,
+        "max_tokens": max(VISION_MAX_TOKENS, 2400),
+    }
+    resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
+    if resp.status_code >= 400:
+        body = resp.text[:500] if resp.text else ""
+        raise RuntimeError(f"视觉OCR调用失败：状态码={resp.status_code}；返回={body}")
+    answer = resp.json()["choices"][0]["message"]["content"]
+    text = _extract_essay_text(answer)
+    return {"text": text or answer.strip(), "page": page_number, "model": VISION_MODEL}
+
+
+@app.route("/api/essay/ocr-image", methods=["POST"])
+def essay_ocr_image():
+    """OCR one page of a handwritten or printed essay answer."""
+    if "file" not in request.files:
+        return jsonify({"error": "未选择答案图片"}), 400
+
+    file = request.files["file"]
+    fname = file.filename or "answer.jpg"
+    if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return jsonify({"error": "答案图片仅支持 JPG、PNG、WEBP"}), 400
+    if request.content_length and request.content_length > 7 * 1024 * 1024:
+        return jsonify({"error": "单张答案图片不能超过7MB"}), 413
+
+    try:
+        page_number = max(1, int(request.form.get("page", "1")))
+    except (TypeError, ValueError):
+        page_number = 1
+    safe_name = secure_filename(fname) or "answer.jpg"
+    filepath = os.path.join(
+        IMAGE_UPLOADS_DIR,
+        f"essay_ocr_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+    )
+    file.save(filepath)
+    try:
+        result = _call_vision_essay_ocr(filepath, page_number=page_number)
+        result["filename"] = safe_name
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": f"答案图片识别失败: {exc}"}), 500
+    finally:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+
+
 def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "review") -> dict:
     """Run fast one-pass review or deep OCR-plus-review for an essay image."""
     import base64

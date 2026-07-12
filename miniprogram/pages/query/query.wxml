@@ -18,7 +18,16 @@
       <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择整套材料与题目文件</button>
       <view wx:if="{{paperFileName}}" class="file-name">已选择：{{paperFileName}}</view>
       <textarea class="textarea full-textarea" placeholder="也可在这里粘贴材料、题目和作答要求" value="{{paperText}}" bindinput="onPaperTextInput" disabled="{{reviewing}}" maxlength="30000"></textarea>
+      <view class="answer-label">文字答案（可选）</view>
       <textarea class="textarea full-textarea answer-area" placeholder="粘贴各题作答内容，建议按“第1题：…… 第2题：……”分段" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>
+      <button class="btn secondary file-btn" bindtap="chooseAnswerImages" disabled="{{reviewing}}">从相册选择答案图片（最多9张）</button>
+      <view wx:if="{{answerImages.length}}" class="answer-image-meta">已选择 {{answerImages.length}} 张，系统会按选择顺序识别。</view>
+      <view wx:if="{{answerImages.length}}" class="answer-image-list">
+        <view class="answer-image-item" wx:for="{{answerImages}}" wx:key="path">
+          <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
+          <button class="remove-image-btn" data-index="{{index}}" bindtap="removeAnswerImage" disabled="{{reviewing}}">移除</button>
+        </view>
+      </view>
       <button class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'整套批改中':'开始整套批改'}}</button>
       <view wx:if="{{reviewing}}" class="upload-tip">正在读取材料、检索知识库并逐题批改，请不要重复提交。</view>
     </view>
