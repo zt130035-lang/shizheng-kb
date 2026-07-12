@@ -23,6 +23,7 @@ import json
 import glob
 import time
 import hashlib
+import secrets
 import fitz  # PyMuPDF
 import requests
 import chromadb
@@ -47,9 +48,10 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 ESSAY_VAULT_DIR = os.path.join(BASE_DIR, "essay_vault")
 ESSAY_MATERIALS_COLLECTION = "essay_materials"
 ESSAY_KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "essay_knowledge_db")
+ESSAY_TEMP_DIR = os.path.join(DATA_DIR, "essay_temp")
 
 # 确保目录存在
-for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR]:
+for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR, ESSAY_TEMP_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # 用户数据文件
@@ -2505,6 +2507,65 @@ def essay_extract_topic():
     return jsonify(parsed)
 
 
+def _essay_temp_paper_path(paper_id: str) -> str:
+    """Resolve a short-lived local-file upload token without path traversal."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,120}", paper_id or ""):
+        return ""
+    return os.path.join(ESSAY_TEMP_DIR, f"{paper_id}.json")
+
+
+@app.route("/mobile-upload")
+def mobile_upload_page():
+    """Mobile web-view file picker used because Mini Programs cannot browse all local files natively."""
+    return send_from_directory(STATIC_DIR, "mobile-upload.html")
+
+
+@app.route("/api/essay/paper-upload", methods=["POST"])
+def essay_paper_upload():
+    """Parse a locally selected paper and return a short-lived token for full review."""
+    if "file" not in request.files:
+        return jsonify({"error": "未选择整套试卷文件"}), 400
+    file = request.files["file"]
+    fname = file.filename or "essay_paper"
+    if not fname.lower().endswith((".pdf", ".docx", ".txt", ".md")):
+        return jsonify({"error": "整套试卷仅支持 PDF、Word(.docx)、TXT 或 Markdown"}), 400
+    if request.content_length and request.content_length > 25 * 1024 * 1024:
+        return jsonify({"error": "上传文件不能超过25MB"}), 413
+
+    safe_name = secure_filename(fname) or "essay_paper"
+    filepath = os.path.join(
+        PDF_UPLOADS_DIR,
+        f"essay_local_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+    )
+    file.save(filepath)
+    try:
+        paper_text = extract_document_text(filepath, fname).strip()
+    except Exception as exc:
+        return jsonify({"error": f"整套试卷解析失败: {exc}"}), 400
+    finally:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+
+    if not paper_text:
+        return jsonify({"error": "未能从文件中提取到文字，扫描件请先转为可识别文本或图片"}), 400
+    paper_id = secrets.token_urlsafe(24)
+    temp_path = _essay_temp_paper_path(paper_id)
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "filename": fname,
+            "paper_text": paper_text,
+            "created_at": time.time(),
+        }, f, ensure_ascii=False)
+    return jsonify({
+        "paper_id": paper_id,
+        "filename": fname,
+        "chars": len(paper_text),
+        "expires_minutes": 30,
+    })
+
+
 @app.route("/api/essay/full-review", methods=["POST"])
 def essay_full_review():
     """Review a complete essay paper: material, prompts and candidate answers."""
@@ -2512,6 +2573,7 @@ def essay_full_review():
     data = data or {}
     uploaded = request.files.get("file") or request.files.get("paper_file")
     paper_text = str(data.get("paper_text", "") or "").strip()
+    paper_id = str(data.get("paper_id", "") or "").strip()
     source = "text"
     temporary_path = ""
 
@@ -2537,6 +2599,20 @@ def essay_full_review():
                 os.remove(temporary_path)
             except OSError:
                 pass
+
+    if not paper_text and not uploaded and paper_id:
+        temp_path = _essay_temp_paper_path(paper_id)
+        try:
+            with open(temp_path, "r", encoding="utf-8") as f:
+                temp_paper = json.load(f)
+            if time.time() - float(temp_paper.get("created_at", 0)) > 30 * 60:
+                raise ValueError("本地文件上传已过期，请重新选择")
+            paper_text = str(temp_paper.get("paper_text", "")).strip()
+            source = "local_file"
+        except FileNotFoundError:
+            return jsonify({"error": "本地文件上传记录不存在，请重新选择文件"}), 400
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            return jsonify({"error": str(exc)}), 400
 
     answers = data.get("answers", "")
     if isinstance(answers, (dict, list)):

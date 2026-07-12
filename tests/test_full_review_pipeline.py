@@ -1,5 +1,6 @@
 import io
 import json
+import os
 from unittest.mock import patch
 
 import server
@@ -99,3 +100,30 @@ def test_answer_ocr_endpoint_returns_text():
     assert response.status_code == 200
     assert response.get_json()["text"] == "第1题：基层服务不足。"
     assert response.get_json()["page"] == 2
+
+
+def test_local_paper_upload_token_can_feed_full_review():
+    client = server.app.test_client()
+    with patch.object(server, "extract_document_text", return_value="本地材料文本\n第1题：概括问题。"), \
+         patch("werkzeug.datastructures.FileStorage.save"):
+        upload = client.post(
+            "/api/essay/paper-upload",
+            data={"file": (io.BytesIO(b"paper"), "local.pdf")},
+            content_type="multipart/form-data",
+        )
+
+    assert upload.status_code == 200
+    paper_id = upload.get_json()["paper_id"]
+    try:
+        with patch.object(server, "_search_kb_for_essay", return_value=""), \
+             patch.object(server, "call_deepseek", return_value=_ai_report()):
+            response = client.post("/api/essay/full-review", json={
+                "paper_id": paper_id,
+                "answers": "第1题：基层服务不足。",
+            })
+        assert response.status_code == 200
+        assert response.get_json()["source"] == "local_file"
+    finally:
+        temp_path = server._essay_temp_paper_path(paper_id)
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)

@@ -41,6 +41,7 @@ Page({
     paperTitle: '',
     paperText: '',
     paperFilePath: '',
+    paperFileToken: '',
     paperFileName: '',
     answerText: '',
     answerImages: [],
@@ -51,6 +52,19 @@ Page({
     essayAnswerHtml: '',
     reviewing: false,
     reviewMode: 'fast'
+  },
+
+  onShow() {
+    const result = wx.getStorageSync('PAPER_UPLOAD_RESULT')
+    if (!result || result.type !== 'essay-paper') return
+    wx.removeStorageSync('PAPER_UPLOAD_RESULT')
+    this.setData({
+      paperFilePath: '',
+      paperFileToken: result.paper_id || '',
+      paperFileName: result.filename || '已选择手机本地试卷',
+      paperText: '',
+      fullReview: null
+    })
   },
 
   setReviewKind(e) {
@@ -97,8 +111,22 @@ Page({
 
   choosePaperFile() {
     if (this.data.reviewing) return
+    wx.showActionSheet({
+      itemList: ['手机本地文件', '微信聊天文件'],
+      success: (res) => {
+        if (res.tapIndex === 0) return this.openLocalPaperPicker()
+        this.chooseChatPaperFile()
+      }
+    })
+  },
+
+  openLocalPaperPicker() {
+    wx.navigateTo({ url: '/pages/uploader/uploader' })
+  },
+
+  chooseChatPaperFile() {
     if (!wx.chooseMessageFile) {
-      return wx.showToast({ title: '当前微信版本不支持文件选择', icon: 'none' })
+      return wx.showToast({ title: '当前微信版本不支持聊天文件选择', icon: 'none' })
     }
     wx.chooseMessageFile({
       count: 1,
@@ -112,6 +140,7 @@ Page({
         }
         this.setData({
           paperFilePath: file.path,
+          paperFileToken: '',
           paperFileName: file.name || '已选择整套试卷',
           fullReview: null
         })
@@ -126,7 +155,7 @@ Page({
 
   async submitFullReview() {
     if (this.data.reviewing) return
-    if (!this.data.paperFilePath && this.data.paperText.trim().length < 20) {
+    if (!this.data.paperFilePath && !this.data.paperFileToken && this.data.paperText.trim().length < 20) {
       return wx.showToast({ title: '请上传或粘贴材料与题目', icon: 'none' })
     }
     if (this.data.answerText.trim().length < 2 && !this.data.answerImages.length) {
@@ -152,6 +181,7 @@ Page({
       const payload = {
         topic: this.data.paperTitle.trim(),
         paper_text: this.data.paperText.trim(),
+        paper_id: this.data.paperFileToken,
         answers: [this.data.answerText.trim(), imageAnswer].filter(Boolean).join('\n\n')
       }
       const result = this.data.paperFilePath

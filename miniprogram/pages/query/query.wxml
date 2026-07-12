@@ -12,7 +12,7 @@
   <block wx:if="{{reviewKind=='full'}}">
     <view class="section card">
       <view class="section-title">试卷与作答</view>
-      <view class="card-meta">支持 PDF、Word、TXT、Markdown，单个文件不超过 25MB。也可以直接粘贴文本。</view>
+      <view class="card-meta">支持手机本地文件、微信聊天文件和直接粘贴文本。文件格式为 PDF、Word、TXT、Markdown，单个不超过 25MB。</view>
       <view class="divider"></view>
       <input class="input" placeholder="试卷名称或考试名称（可不填）" value="{{paperTitle}}" bindinput="onPaperTitleInput" disabled="{{reviewing}}" />
       <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择整套材料与题目文件</button>

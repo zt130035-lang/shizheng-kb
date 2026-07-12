@@ -2,6 +2,7 @@
   "pages": [
     "pages/home/home",
     "pages/query/query",
+    "pages/uploader/uploader",
     "pages/templates/templates",
     "pages/mine/mine"
   ],
