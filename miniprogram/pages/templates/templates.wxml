@@ -1,7 +1,7 @@
 <view class="container">
   <view class="hero template-hero">
     <view class="hero-title">写作模板</view>
-    <view class="hero-subtitle">提供常见题型的基础写法，仅作为练习参考，可结合自己的表达进行调整。</view>
+    <view class="hero-subtitle">按题型查看答题框架。</view>
   </view>
 
   <view class="section list">

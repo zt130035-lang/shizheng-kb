@@ -1,82 +1,82 @@
 <view class="container">
   <view class="hero essay-hero">
-    <view class="hero-title">申论整套批改</view>
-    <view class="hero-subtitle">上传整套材料和题目，再提交各题作答，系统会按知识库规则逐题核对、评分并给出修改答案。</view>
+    <view class="hero-title">申论批改</view>
+    <view class="hero-subtitle">上传真题和答案，按题评分并修改。</view>
   </view>
 
   <view class="mode-switch kind-switch">
-    <button class="mode-option {{reviewKind=='full'?'active':''}}" data-kind="full" bindtap="setReviewKind" disabled="{{reviewing}}">整套批改</button>
-    <button class="mode-option {{reviewKind=='image'?'active':''}}" data-kind="image" bindtap="setReviewKind" disabled="{{reviewing}}">图片批改</button>
+    <button class="mode-option {{reviewKind=='full'?'active':''}}" data-kind="full" bindtap="setReviewKind" disabled="{{reviewing}}">整套</button>
+    <button class="mode-option {{reviewKind=='image'?'active':''}}" data-kind="image" bindtap="setReviewKind" disabled="{{reviewing}}">作文图片</button>
   </view>
 
   <block wx:if="{{reviewKind=='full'}}">
     <view class="section card">
-      <view class="section-title">试卷与作答</view>
-      <view class="card-meta">支持手机本地文件、微信聊天文件和直接粘贴文本。文件格式为 PDF、Word、TXT、Markdown，单个不超过 25MB。</view>
+      <view class="section-title">历年真题</view>
+      <view class="card-meta">支持手机文件、聊天文件或粘贴文本。</view>
       <view class="divider"></view>
-      <input class="input" placeholder="试卷名称或考试名称（可不填）" value="{{paperTitle}}" bindinput="onPaperTitleInput" disabled="{{reviewing}}" />
-      <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择整套材料与题目文件</button>
-      <view wx:if="{{paperFileName}}" class="file-name">已选择：{{paperFileName}}</view>
-      <textarea class="textarea full-textarea" placeholder="也可在这里粘贴材料、题目和作答要求" value="{{paperText}}" bindinput="onPaperTextInput" disabled="{{reviewing}}" maxlength="30000"></textarea>
+      <input class="input" placeholder="考试名称（可选）" value="{{paperTitle}}" bindinput="onPaperTitleInput" disabled="{{reviewing}}" />
+      <button class="btn secondary file-btn" bindtap="choosePaperFile" disabled="{{reviewing}}">选择历年真题</button>
+      <view wx:if="{{paperFileName}}" class="file-name">已选：{{paperFileName}}</view>
+      <textarea class="textarea full-textarea" placeholder="粘贴材料和题目" value="{{paperText}}" bindinput="onPaperTextInput" disabled="{{reviewing}}" maxlength="30000"></textarea>
       <view class="answer-label">文字答案（可选）</view>
-      <textarea class="textarea full-textarea answer-area" placeholder="粘贴各题作答内容，建议按“第1题：…… 第2题：……”分段" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>
-      <button class="btn secondary file-btn" bindtap="chooseAnswerImages" disabled="{{reviewing}}">从相册选择答案图片（最多9张）</button>
-      <view wx:if="{{answerImages.length}}" class="answer-image-meta">已选择 {{answerImages.length}} 张，系统会按选择顺序识别。</view>
+      <textarea class="textarea full-textarea answer-area" placeholder="粘贴答案，可分题填写" value="{{answerText}}" bindinput="onAnswerInput" disabled="{{reviewing}}" maxlength="20000"></textarea>
+      <button class="btn secondary file-btn" bindtap="chooseAnswerImages" disabled="{{reviewing}}">上传答案图片（最多9张）</button>
+      <view wx:if="{{answerImages.length}}" class="answer-image-meta">已选 {{answerImages.length}} 张，按顺序识别。</view>
       <view wx:if="{{answerImages.length}}" class="answer-image-list">
         <view class="answer-image-item" wx:for="{{answerImages}}" wx:key="path">
           <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
           <button class="remove-image-btn" data-index="{{index}}" bindtap="removeAnswerImage" disabled="{{reviewing}}">移除</button>
         </view>
       </view>
-      <button class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'整套批改中':'开始整套批改'}}</button>
-      <view wx:if="{{reviewing}}" class="upload-tip">正在读取材料、检索知识库并逐题批改，请不要重复提交。</view>
+      <button class="btn" bindtap="submitFullReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
+      <view wx:if="{{reviewing}}" class="upload-tip">正在批改，请稍候。</view>
     </view>
 
     <view class="section card guide-card">
-      <view class="section-title">批改范围</view>
+      <view class="section-title">批改内容</view>
       <view class="divider"></view>
-      <view class="tip-line">识别题型：概括归纳、综合分析、提出对策、应用文和大作文。</view>
-      <view class="tip-line">核对要点：材料依据、命中程度、得分理由、失分点和修改动作。</view>
-      <view class="tip-line">评分说明：未提供官方评分细则时，结果为依据材料和知识库规则的估算分。</view>
+      <view class="tip-line">题型：概括、分析、对策、公文、大作文。</view>
+      <view class="tip-line">检查：命中、漏点、错点和表达。</view>
+      <view class="tip-line">未提供官方标准时，显示估分。</view>
     </view>
   </block>
 
   <block wx:else>
     <view class="section card">
-      <view class="section-title">上传作文图片</view>
-      <view class="card-meta">建议上传清晰、裁剪后的作文图片，单张不超过 5MB。</view>
+      <view class="section-title">作文图片</view>
+      <view class="card-meta">单张不超过 5MB。</view>
       <view class="divider"></view>
-      <input class="input" placeholder="题目，可不填" value="{{essayTopic}}" bindinput="onTopicInput" disabled="{{reviewing}}" />
-      <view class="mode-title">批改模式</view>
+      <input class="input" placeholder="作文题目（可选）" value="{{essayTopic}}" bindinput="onTopicInput" disabled="{{reviewing}}" />
+      <view class="mode-title">模式</view>
       <view class="mode-switch">
-        <button class="mode-option {{reviewMode=='fast'?'active':''}}" data-mode="fast" bindtap="setReviewMode" disabled="{{reviewing}}">快速批改</button>
-        <button class="mode-option {{reviewMode=='deep'?'active':''}}" data-mode="deep" bindtap="setReviewMode" disabled="{{reviewing}}">深度批改</button>
+        <button class="mode-option {{reviewMode=='fast'?'active':''}}" data-mode="fast" bindtap="setReviewMode" disabled="{{reviewing}}">快速</button>
+        <button class="mode-option {{reviewMode=='deep'?'active':''}}" data-mode="deep" bindtap="setReviewMode" disabled="{{reviewing}}">深度</button>
       </view>
       <view class="upload-actions">
         <button class="btn upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="camera">拍照添加</button>
-        <button class="btn secondary upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">相册选择多张</button>
+        <button class="btn secondary upload-btn" disabled="{{reviewing}}" bindtap="chooseEssayImage" data-source="album">相册选图</button>
       </view>
-      <view wx:if="{{essayImages.length}}" class="answer-image-meta">已选择 {{essayImages.length}} 张作文图片，系统会按顺序合并。</view>
+      <view wx:if="{{essayImages.length}}" class="answer-image-meta">已选 {{essayImages.length}} 张，按顺序合并。</view>
       <view wx:if="{{essayImages.length}}" class="answer-image-list">
         <view class="answer-image-item" wx:for="{{essayImages}}" wx:key="path">
           <image class="answer-image-preview" src="{{item.path}}" mode="aspectFill"></image>
           <button class="remove-image-btn" data-index="{{index}}" bindtap="removeEssayImage" disabled="{{reviewing}}">移除</button>
         </view>
       </view>
-      <button wx:if="{{essayImages.length}}" class="btn image-review-btn" bindtap="startEssayReview" disabled="{{reviewing}}">{{reviewing?'图片批改中':'开始图片批改'}}</button>
-      <view wx:if="{{reviewing}}" class="upload-tip">正在识别和批改，请不要重复点击或退出页面。</view>
+      <button wx:if="{{essayImages.length}}" class="btn image-review-btn" bindtap="startEssayReview" disabled="{{reviewing}}">{{reviewing?'批改中':'开始批改'}}</button>
+      <view wx:if="{{reviewing}}" class="upload-tip">正在批改，请稍候。</view>
     </view>
   </block>
 
   <view class="section card" wx:if="{{essayAnswer}}">
     <view class="result-head">
       <view class="section-title">批改结果</view>
-      <button class="mini-btn" bindtap="copyEssayAnswer">复制结果</button>
+      <button class="mini-btn" bindtap="copyEssayAnswer">复制</button>
     </view>
     <view class="divider"></view>
     <view wx:if="{{fullReview && fullReview.overview}}" class="score-summary">
       <view class="score-number">{{fullReview.overview.total_score}}<text wx:if="{{fullReview.overview.total_score_max}}">/{{fullReview.overview.total_score_max}}</text></view>
-      <view class="score-label">整套估算分</view>
+      <view class="score-label">总分（估）</view>
     </view>
     <rich-text class="rich" nodes="{{essayAnswerHtml}}"></rich-text>
   </view>

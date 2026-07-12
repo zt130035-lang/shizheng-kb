@@ -1,7 +1,7 @@
 <view class="container">
   <view class="hero mine-hero">
     <view class="hero-title">我的</view>
-    <view class="hero-subtitle">查看本机最近批改记录和使用说明。</view>
+    <view class="hero-subtitle">查看记录和设置。</view>
   </view>
 
   <view class="section card">
@@ -24,7 +24,7 @@
   </view>
 
   <view class="section card">
-    <view class="section-title">使用说明</view>
+    <view class="section-title">说明</view>
     <view class="divider"></view>
     <view class="tip-line" wx:for="{{tips}}" wx:key="*this">{{index + 1}}. {{item}}</view>
   </view>

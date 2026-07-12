@@ -1,34 +1,34 @@
 <view class="container">
   <view class="hero">
-    <view class="hero-title">申论写作助手</view>
-    <view class="hero-subtitle">专注作文图片批改、结构建议和写作模板参考，帮助日常练习更高效。</view>
+    <view class="hero-title">申论批改</view>
+    <view class="hero-subtitle">上传真题和答案，按题批改。</view>
   </view>
 
   <view class="section grid">
     <view class="card feature-card">
       <view class="feature-icon">📷</view>
       <view class="card-title">图片批改</view>
-      <view class="card-meta">上传作文图片，获取修改建议。</view>
+      <view class="card-meta">上传作文图。</view>
     </view>
     <view class="card feature-card">
       <view class="feature-icon">🧩</view>
       <view class="card-title">结构优化</view>
-      <view class="card-meta">从立意、层次、表达等角度辅助检查。</view>
+      <view class="card-meta">检查结构和表达。</view>
     </view>
     <view class="card feature-card">
       <view class="feature-icon">📚</view>
       <view class="card-title">写作模板</view>
-      <view class="card-meta">提供常见题型的写作框架。</view>
+      <view class="card-meta">查看题型框架。</view>
     </view>
     <view class="card feature-card">
       <view class="feature-icon">📝</view>
       <view class="card-title">本地记录</view>
-      <view class="card-meta">最近批改结果保存在本机，方便回看。</view>
+      <view class="card-meta">保存批改记录。</view>
     </view>
   </view>
 
   <view class="section card">
-    <view class="section-title">使用流程</view>
+    <view class="section-title">三步批改</view>
     <view class="divider"></view>
     <view class="step" wx:for="{{steps}}" wx:key="title">
       <view class="step-index">{{index + 1}}</view>
@@ -41,6 +41,6 @@
 
   <view class="section action-panel">
     <button class="btn" bindtap="goReview">开始批改</button>
-    <button class="btn secondary" bindtap="goTemplates">查看模板</button>
+    <button class="btn secondary" bindtap="goTemplates">看模板</button>
   </view>
 </view>
