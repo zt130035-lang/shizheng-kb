@@ -74,9 +74,14 @@ _cleanup_old_files(IMAGE_UPLOADS_DIR)
 USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
 
 # ========== API 配置 ==========
-SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "sk-bapmemmmswmycyamlywctomymaievhzmlyznvenqosetlgxa")
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 VISION_API_KEY = os.environ.get("VISION_API_KEY", SILICONFLOW_API_KEY)
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-97ca5455764543a8b57f63f3f9cacfef")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_URL = os.environ.get(
+    "DEEPSEEK_API_URL",
+    "https://api.deepseek.com/v1/chat/completions"
+)
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
@@ -570,13 +575,15 @@ def call_deepseek(prompt: str, system: str = "") -> str:
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    payload = {"model": "deepseek-chat", "messages": messages, "temperature": 0.3}
+    payload = {"model": DEEPSEEK_MODEL, "messages": messages, "temperature": 0.3}
     try:
         resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
+            DEEPSEEK_API_URL,
             headers=headers, json=payload, timeout=60
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            detail = resp.text[:500] if resp.text else ""
+            return f"AIè°ç¨å¤±è´¥: HTTP {resp.status_code}ï¼æ¨¡å={DEEPSEEK_MODEL}ï¼{detail}"
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"AI调用失败: {e}"
@@ -2365,6 +2372,8 @@ def essay_review():
 
     system = "你是资深公考申论阅卷专家，有10年申论批改经验。请按照国考申论评分标准进行客观、专业的批改，指出不足的同时肯定优点。"
     answer = call_deepseek(prompt, system)
+    if not answer or answer.lstrip().startswith("AIè°ç¨å¤±è´¥:"):
+        return jsonify({"error": answer or "AIæªè¿åæ¹æ¹ç»æ"}), 502
     html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
     return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
 

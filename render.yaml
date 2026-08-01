@@ -11,6 +11,10 @@ services:
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
+      - key: DEEPSEEK_API_URL
+        value: "https://api.deepseek.com/v1/chat/completions"
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-v4-flash"
       - key: VISION_API_KEY
         sync: false
       - key: VISION_MODEL
