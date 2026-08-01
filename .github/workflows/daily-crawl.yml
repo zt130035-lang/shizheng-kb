@@ -1,0 +1,29 @@
+name: Daily Crawl
+
+on:
+  schedule:
+    - cron: "30 23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-crawl
+  cancel-in-progress: false
+
+jobs:
+  trigger-crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger daily crawl
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors \
+            --connect-timeout 20 --max-time 60 \
+            -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            https://shizheng-kb.onrender.com/api/cron/daily-crawl
