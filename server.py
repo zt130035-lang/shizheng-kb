@@ -197,6 +197,29 @@ _EMBED_CACHE = {}
 app = Flask(__name__, static_folder=STATIC_DIR)
 app.before_request(enforce_expensive_api_rate_limits)
 
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    version = (
+        os.environ.get("RENDER_GIT_COMMIT")
+        or os.environ.get("APP_VERSION")
+        or "dev"
+    )[:12]
+    return jsonify({
+        "status": "ok",
+        "service": "beikaobao",
+        "version": version,
+        "models": {
+            "review": DEEPSEEK_MODEL,
+            "vision": VISION_MODEL,
+        },
+        "limits": {
+            "essay_max_chars": ESSAY_MAX_CHARS,
+            "ai_per_hour": AI_RATE_LIMIT_PER_HOUR,
+            "ocr_per_hour": OCR_RATE_LIMIT_PER_HOUR,
+        },
+    })
+
 # ========== 工具函数 ==========
 
 def git_sync_to_github(message: str = "auto: sync data"):
