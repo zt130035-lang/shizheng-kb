@@ -3316,14 +3316,19 @@ def essay_image_review():
             pass
 
 # ========== 定时爬取接口 ==========
-CRON_SECRET = os.environ.get("CRON_SECRET", "shizheng2026")
+CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()
 
 @app.route("/api/cron/daily-crawl", methods=["POST", "GET"])
 def cron_daily_crawl():
     """定时爬取新闻，供外部cron服务调用"""
-    # 简单鉴权
-    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
-    if secret != CRON_SECRET:
+    # Header is preferred; the query parameter remains for existing schedulers.
+    provided_secret = (
+        request.headers.get("X-Cron-Secret", "").strip()
+        or request.args.get("secret", "").strip()
+    )
+    if not CRON_SECRET:
+        return jsonify({"error": "cron service is not configured"}), 503
+    if not provided_secret or not secrets.compare_digest(provided_secret, CRON_SECRET):
         return jsonify({"error": "unauthorized"}), 401
 
     import threading

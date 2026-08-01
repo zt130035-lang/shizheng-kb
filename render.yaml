@@ -23,6 +23,8 @@ services:
         value: "120"
       - key: CRAWL_RATE_LIMIT_PER_HOUR
         value: "4"
+      - key: CRON_SECRET
+        sync: false
       - key: VISION_API_KEY
         sync: false
       - key: VISION_MODEL
