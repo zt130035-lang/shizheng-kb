@@ -25,6 +25,7 @@ import time
 import hashlib
 import secrets
 import io
+import threading
 import fitz  # PyMuPDF
 import requests
 import chromadb
@@ -90,6 +91,102 @@ VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
 VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "1600"))
 
+
+def _env_nonnegative_int(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+ESSAY_MAX_CHARS = _env_nonnegative_int("ESSAY_MAX_CHARS", 12000)
+AI_RATE_LIMIT_PER_HOUR = _env_nonnegative_int("AI_RATE_LIMIT_PER_HOUR", 60)
+OCR_RATE_LIMIT_PER_HOUR = _env_nonnegative_int("OCR_RATE_LIMIT_PER_HOUR", 120)
+CRAWL_RATE_LIMIT_PER_HOUR = _env_nonnegative_int("CRAWL_RATE_LIMIT_PER_HOUR", 4)
+_RATE_LIMIT_BUCKETS = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+
+_AI_RATE_LIMIT_PATHS = frozenset({
+    "/api/pdf/extract",
+    "/api/pdf/check",
+    "/api/pdf/questions/analyze",
+    "/api/query/explain",
+    "/api/essay/review",
+    "/api/essay/assist",
+    "/api/essay/polish",
+    "/api/essay/extract-topic",
+    "/api/essay/full-review",
+    "/api/essay/compare",
+    "/api/essay/image-review",
+})
+_OCR_RATE_LIMIT_PATHS = frozenset({"/api/essay/ocr-image"})
+_CRAWL_RATE_LIMIT_PATHS = frozenset({"/api/crawl"})
+
+
+def _request_client_ip() -> str:
+    forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+    if not forwarded:
+        forwarded = (
+            request.headers.get("X-Forwarded-For", "")
+            .split(",", 1)[0]
+            .strip()
+        )
+    return (forwarded or request.remote_addr or "unknown")[:64]
+
+
+def _enforce_rate_limit(scope: str, limit: int, window_seconds: int = 3600):
+    if limit <= 0:
+        return None
+    now = time.monotonic()
+    key = (scope, _request_client_ip())
+    cutoff = now - window_seconds
+    with _RATE_LIMIT_LOCK:
+        hits = [
+            timestamp
+            for timestamp in _RATE_LIMIT_BUCKETS.get(key, ())
+            if timestamp > cutoff
+        ]
+        if len(hits) >= limit:
+            retry_after = max(1, int(window_seconds - (now - hits[0])) + 1)
+            _RATE_LIMIT_BUCKETS[key] = hits
+            response = jsonify({
+                "error": f"请求过于频繁，请{retry_after}秒后再试",
+                "retry_after": retry_after,
+            })
+            response.status_code = 429
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        hits.append(now)
+        _RATE_LIMIT_BUCKETS[key] = hits
+        if len(_RATE_LIMIT_BUCKETS) > 2048:
+            stale_keys = [
+                bucket_key
+                for bucket_key, values in _RATE_LIMIT_BUCKETS.items()
+                if not values or values[-1] <= cutoff
+            ]
+            for bucket_key in stale_keys:
+                _RATE_LIMIT_BUCKETS.pop(bucket_key, None)
+            if len(_RATE_LIMIT_BUCKETS) > 2048:
+                oldest_key = min(
+                    _RATE_LIMIT_BUCKETS,
+                    key=lambda bucket_key: _RATE_LIMIT_BUCKETS[bucket_key][-1],
+                )
+                _RATE_LIMIT_BUCKETS.pop(oldest_key, None)
+    return None
+
+
+def enforce_expensive_api_rate_limits():
+    if request.method != "POST":
+        return None
+    path = request.path.rstrip("/") or "/"
+    if path in _OCR_RATE_LIMIT_PATHS:
+        return _enforce_rate_limit("ocr", OCR_RATE_LIMIT_PER_HOUR)
+    if path in _CRAWL_RATE_LIMIT_PATHS:
+        return _enforce_rate_limit("crawl", CRAWL_RATE_LIMIT_PER_HOUR)
+    if path in _AI_RATE_LIMIT_PATHS:
+        return _enforce_rate_limit("ai", AI_RATE_LIMIT_PER_HOUR)
+    return None
+
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "zt130035-lang/shizheng-kb")
@@ -98,6 +195,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "zt130035-lang/shizheng-kb")
 _EMBED_CACHE = {}
 
 app = Flask(__name__, static_folder=STATIC_DIR)
+app.before_request(enforce_expensive_api_rate_limits)
 
 # ========== 工具函数 ==========
 
@@ -583,7 +681,7 @@ def call_deepseek(prompt: str, system: str = "") -> str:
         )
         if not resp.ok:
             detail = resp.text[:500] if resp.text else ""
-            return f"AIè°ç¨å¤±è´¥: HTTP {resp.status_code}ï¼æ¨¡å={DEEPSEEK_MODEL}ï¼{detail}"
+            return f"AI调用失败: HTTP {resp.status_code}，模型={DEEPSEEK_MODEL}，{detail}"
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"AI调用失败: {e}"
@@ -2321,14 +2419,20 @@ def _search_kb_for_essay(text: str, top_k: int = 5, use_rerank: bool = True) -> 
 @app.route("/api/essay/review", methods=["POST"])
 def essay_review():
     """申论批改打分"""
-    data = request.json
-    essay = data.get("essay", "").strip()
-    topic = data.get("topic", "").strip()
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    essay = str(data.get("essay", "") or "").strip()
+    topic = str(data.get("topic", "") or "").strip()
 
     if not essay:
         return jsonify({"error": "请输入申论内容"}), 400
     if len(essay) < 50:
         return jsonify({"error": "文章太短，至少50字"}), 400
+    if ESSAY_MAX_CHARS and len(essay) > ESSAY_MAX_CHARS:
+        return jsonify({"error": f"文章过长，最多支持{ESSAY_MAX_CHARS}字"}), 413
+    if len(topic) > 500:
+        return jsonify({"error": "申论题目不能超过500字"}), 413
 
     # 从知识库检索相关素材
     kb_materials = _search_kb_for_essay(essay)
@@ -2372,8 +2476,8 @@ def essay_review():
 
     system = "你是资深公考申论阅卷专家，有10年申论批改经验。请按照国考申论评分标准进行客观、专业的批改，指出不足的同时肯定优点。"
     answer = call_deepseek(prompt, system)
-    if not answer or answer.lstrip().startswith("AIè°ç¨å¤±è´¥:"):
-        return jsonify({"error": answer or "AIæªè¿åæ¹æ¹ç»æ"}), 502
+    if not answer or answer.lstrip().startswith("AI调用失败:"):
+        return jsonify({"error": answer or "AI未返回批改结果"}), 502
     html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
     return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
 

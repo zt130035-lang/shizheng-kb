@@ -15,6 +15,14 @@ services:
         value: "https://api.deepseek.com/v1/chat/completions"
       - key: DEEPSEEK_MODEL
         value: "deepseek-v4-flash"
+      - key: ESSAY_MAX_CHARS
+        value: "12000"
+      - key: AI_RATE_LIMIT_PER_HOUR
+        value: "60"
+      - key: OCR_RATE_LIMIT_PER_HOUR
+        value: "120"
+      - key: CRAWL_RATE_LIMIT_PER_HOUR
+        value: "4"
       - key: VISION_API_KEY
         sync: false
       - key: VISION_MODEL
