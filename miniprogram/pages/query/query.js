@@ -319,7 +319,7 @@ Page({
         }
         imageAnswer = ocrParts.join('\n\n')
         if (!imageAnswer.trim()) throw new Error('答案图片未识别出文字，请换清晰图片重试')
-        wx.showLoading({ title: '整套批改中', mask: true })
+        this.setData({ uploadProgressText: '整套批改中' })
       }
       const payload = {
         topic: this.data.paperTitle.trim(),
@@ -444,7 +444,7 @@ Page({
         const essay = parts.join('\n\n')
         if (essay.length < 50) throw new Error('多张图片未识别出足够文字，请上传更清晰的照片')
         this.setData({ essayExtractedText: essay })
-        wx.showLoading({ title: '整合多页并批改', mask: true })
+        this.setData({ uploadProgressText: '整合多页并批改' })
         data = await api.reviewEssayText({ topic: this.data.essayTopic || '', essay })
       }
       if (data.error) {

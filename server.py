@@ -3166,19 +3166,27 @@ def essay_image_review():
     if not fname.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         return jsonify({"error": "仅支持 JPG、PNG、WEBP 图片"}), 400
 
+    max_upload_bytes = 6 * 1024 * 1024
+    if request.content_length and request.content_length > max_upload_bytes:
+        return jsonify({"error": "单张图片不能超过5MB"}), 413
+
     topic = request.form.get("topic", "").strip()
     mode = request.form.get("mode", "review").strip() or "review"
-    safe = fname.replace("/", "_").replace("\\", "_")
-    filename = f"essay_img_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe}"
+    safe = secure_filename(fname) or "essay.jpg"
+    filename = f"essay_img_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe}"
     filepath = os.path.join(IMAGE_UPLOADS_DIR, filename)
-    file.save(filepath)
-
     try:
+        file.save(filepath)
         result = _call_vision_essay_review(filepath, topic=topic, mode=mode)
         result["filename"] = filename
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"图片识别/申论批改失败: {e}", "filename": filename}), 500
+    finally:
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
 
 # ========== 定时爬取接口 ==========
 CRON_SECRET = os.environ.get("CRON_SECRET", "shizheng2026")
