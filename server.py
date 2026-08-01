@@ -549,7 +549,7 @@ def build_morning_card(log_prefix: str = "CRON") -> dict:
 
 def send_bark(title: str, body: str, group: str = "考公时政") -> bool:
     """发送 Bark 推送，成功返回True"""
-    bark_key = os.environ.get("BARK_DEVICE_KEY", "CvCwzTHBHUNpm8znAvxsSB")
+    bark_key = os.environ.get("BARK_DEVICE_KEY", "")
     if not bark_key:
         return False
     try:
