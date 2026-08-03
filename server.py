@@ -551,10 +551,20 @@ def rerank_documents(query: str, documents: List[str], top_n: int = 5) -> List[d
     return []
 
 
+def _chroma_settings():
+    # 关闭匿名遥测,避免 posthog 版本不兼容导致启动报错;也省一次外部请求
+    try:
+        return chromadb.config.Settings(anonymized_telemetry=False)
+    except Exception:
+        return None
+
+
 def get_chroma_client():
     global _client_singleton
     if _client_singleton is None:
-        _client_singleton = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIR)
+        _client_singleton = chromadb.PersistentClient(
+            path=KNOWLEDGE_DB_DIR, settings=_chroma_settings()
+        )
     return _client_singleton
 
 
@@ -567,7 +577,9 @@ def get_essay_chroma_client():
     global _essay_client_singleton
     os.makedirs(ESSAY_KNOWLEDGE_DB_DIR, exist_ok=True)
     if _essay_client_singleton is None:
-        _essay_client_singleton = chromadb.PersistentClient(path=ESSAY_KNOWLEDGE_DB_DIR)
+        _essay_client_singleton = chromadb.PersistentClient(
+            path=ESSAY_KNOWLEDGE_DB_DIR, settings=_chroma_settings()
+        )
     return _essay_client_singleton
 
 
