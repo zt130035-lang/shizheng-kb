@@ -1,8 +1,13 @@
 App({
   onLaunch() {
-    // 仅首次启动写入默认线上地址;用户手动设置的 BASE_URL(本地调试等)不再被覆盖
-    if (!wx.getStorageSync('BASE_URL')) {
-      wx.setStorageSync('BASE_URL', 'https://shizheng-kb.onrender.com')
+    const defaultUrl = 'https://shizheng-kb.onrender.com'
+    const saved = String(wx.getStorageSync('BASE_URL') || '').trim()
+    const localHosts = ['127.0.0.1', 'localhost', '0.0.0.0', '10.100.72.76']
+    const cachedLocalUrl = localHosts.some(host => saved.includes(host))
+
+    // 真机无法访问历史本地调试地址，启动时自动恢复线上服务。
+    if (!saved || cachedLocalUrl) {
+      wx.setStorageSync('BASE_URL', defaultUrl)
     }
   },
   onError(err) {

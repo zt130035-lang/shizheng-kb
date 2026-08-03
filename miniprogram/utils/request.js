@@ -63,7 +63,10 @@ function uploadTo(url, path, formData = {}, name = 'file', timeout = 180000, onP
         success(res) {
           let data = {}
           try { data = JSON.parse(res.data || '{}') } catch (e) { /* 非 JSON 响应 */ }
-          if (res.statusCode >= 200 && res.statusCode < 300) return retryOrResolve({ data })
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            const body = (data && typeof data === 'object') ? data : { data }
+            return retryOrResolve(body)
+          }
           return retryOrResolve({ statusCode: res.statusCode, data, error: friendlyError(res.statusCode, data) })
         },
         fail(err) {

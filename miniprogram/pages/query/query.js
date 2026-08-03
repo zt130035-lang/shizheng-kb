@@ -165,9 +165,17 @@ Page({
   setReviewKind(e) {
     if (this.data.reviewing) return
     const kind = e.currentTarget.dataset.kind === 'image' ? 'image' : 'full'
-    // 切到图片批改时清空整套批改留下的答案,避免模式间串结果
-    const clear = kind === 'image' ? { essayAnswer: '', essayAnswerHtml: '', essayExtractedText: '' } : {}
-    this.setData({ reviewKind: kind, ...clear })
+    if (kind === this.data.reviewKind) return
+    // 两种模式共用结果展示区，切换时必须完整清理上一模式的报告状态。
+    this.setData({
+      reviewKind: kind,
+      essayAnswer: '',
+      essayAnswerHtml: '',
+      essayExtractedText: '',
+      fullReview: null,
+      selectedQuestion: null,
+      selectedQuestionIndex: 0
+    })
   },
 
   onPaperTitleInput(e) { this.setData({ paperTitle: e.detail.value }); this.scheduleDraftSave() },
@@ -476,7 +484,16 @@ Page({
     if (this.data.reviewing) return
     const images = this.data.essayImages || []
     if (!images.length) return wx.showToast({ title: '请先选择作文图片', icon: 'none' })
-    this.setData({ reviewing: true, essayExtractedText: '', essayAnswer: '', essayAnswerHtml: '', uploadProgressText: '' })
+    this.setData({
+      reviewing: true,
+      essayExtractedText: '',
+      essayAnswer: '',
+      essayAnswerHtml: '',
+      fullReview: null,
+      selectedQuestion: null,
+      selectedQuestionIndex: 0,
+      uploadProgressText: ''
+    })
     wx.showLoading({ title: images.length > 1 ? '识别多页作文' : '图片批改中', mask: true })
     try {
       let data
