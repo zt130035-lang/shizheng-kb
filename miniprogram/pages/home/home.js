@@ -13,5 +13,18 @@ Page({
 
   goTemplates() {
     wx.switchTab({ url: '/pages/templates/templates' })
+  },
+
+  goFeature(e) {
+    const target = e.currentTarget.dataset.target
+    if (target === 'structure') {
+      return wx.showToast({ title: '结构优化即将上线', icon: 'none' })
+    }
+    const pages = {
+      review: '/pages/query/query',
+      templates: '/pages/templates/templates',
+      mine: '/pages/mine/mine'
+    }
+    if (pages[target]) wx.switchTab({ url: pages[target] })
   }
 })

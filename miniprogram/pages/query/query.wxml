@@ -97,6 +97,10 @@
       <view class="score-number">{{fullReview.overview.total_score}}<text wx:if="{{fullReview.overview.total_score_max}}">/{{fullReview.overview.total_score_max}}</text></view>
       <view class="score-label">总分（估）</view>
     </view>
+    <view wx:if="{{fullReview && fullReview._validation && fullReview._validation.warnings.length}}" class="validation-warn">
+      <view wx:for="{{fullReview._validation.warnings}}" wx:key="*this">⚠ {{item}}</view>
+    </view>
+
     <view wx:if="{{fullReview && fullReview.overview}}" class="review-overview">
       <view wx:if="{{fullReview.overview.overall}}" class="overview-text">{{fullReview.overview.overall}}</view>
       <view wx:if="{{fullReview.overview.scoring_note}}" class="score-note">{{fullReview.overview.scoring_note}}</view>
@@ -123,12 +127,15 @@
           </view>
           <view class="question-score"><text>{{selectedQuestion.displayScore}}</text><text wx:if="{{selectedQuestion.max_score}}">/{{selectedQuestion.max_score}}</text></view>
         </view>
+        <view wx:if="{{selectedQuestion.problem_labels && selectedQuestion.problem_labels.length}}" class="label-row">
+          <text class="problem-label" wx:for="{{selectedQuestion.problem_labels}}" wx:for-item="lb" wx:key="*this">{{lb}}</text>
+        </view>
 
         <view wx:if="{{selectedQuestion.score_reason}}" class="question-reason"><text class="field-label">评分依据</text>{{selectedQuestion.score_reason}}</view>
 
         <view wx:if="{{selectedQuestion.key_points && selectedQuestion.key_points.length}}" class="points-section">
           <view class="subsection-title">材料要点核对</view>
-          <view class="point-item" wx:for="{{selectedQuestion.key_points}}" wx:for-item="point" wx:key="point">
+          <view class="point-item" wx:for="{{selectedQuestion.key_points}}" wx:for-item="point" wx:key="key">
             <view class="point-head">
               <view class="point-index">{{index + 1}}</view>
               <view class="point-title">{{point.point}}</view>

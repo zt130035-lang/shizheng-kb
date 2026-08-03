@@ -26,14 +26,26 @@ import hashlib
 import secrets
 import io
 import threading
+import logging
 import fitz  # PyMuPDF
 import requests
 import chromadb
 import markdown
 from flask import Flask, request, jsonify, send_from_directory, send_file
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List
 from werkzeug.utils import secure_filename
+
+logger = logging.getLogger("beikaobao")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+# 北京时间时区:云端平台(如 Render)默认 UTC,统一用 UTC+8 保证日报/晨读卡日期不错位
+CN_TZ = timezone(timedelta(hours=8))
+
+
+def _now() -> datetime:
+    """返回北京时间(UTC+8)当前时间,替代 _now()。"""
+    return datetime.now(CN_TZ)
 
 # ========== 路径配置 ==========
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -78,18 +90,24 @@ USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
 VISION_API_KEY = os.environ.get("VISION_API_KEY", SILICONFLOW_API_KEY)
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DEEPSEEK_API_URL = os.environ.get(
-    "DEEPSEEK_API_URL",
-    "https://api.deepseek.com/v1/chat/completions"
-)
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+# 按任务分模型:REVIEW_MODEL 用于批改(默认跟随 DEEPSEEK_MODEL),
+# PREPARE_MODEL 用于审题/要点提取(默认跟随 REVIEW_MODEL,可配 glm-4-flash 等快模型)
+REVIEW_MODEL = os.environ.get("REVIEW_MODEL", DEEPSEEK_MODEL)
+PREPARE_MODEL = os.environ.get("PREPARE_MODEL", REVIEW_MODEL)
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_API_URL = "https://api.siliconflow.cn/v1/embeddings"
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 RERANK_API_URL = "https://api.siliconflow.cn/v1/rerank"
 VISION_MODEL = os.environ.get("VISION_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VISION_API_URL = os.environ.get("VISION_API_URL", "https://api.siliconflow.cn/v1/chat/completions")
-VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "1600"))
+VISION_MAX_TOKENS = int(os.environ.get("VISION_MAX_TOKENS", "6144"))
+
+# 仅当部署在可信代理(如 Cloudflare)后才信任转发头,否则限流 IP 可被伪造绕过
+TRUST_PROXY = os.environ.get("TRUST_PROXY", "").strip().lower() in {"1", "true", "yes"}
+# 手动触发类接口(爬取/生成)的可选访问密钥;未配置时保持开放以兼容现有前端
+MANUAL_SECRET = os.environ.get("MANUAL_SECRET", "").strip()
 
 
 def _env_nonnegative_int(name: str, default: int) -> int:
@@ -124,14 +142,17 @@ _CRAWL_RATE_LIMIT_PATHS = frozenset({"/api/crawl"})
 
 
 def _request_client_ip() -> str:
-    forwarded = request.headers.get("CF-Connecting-IP", "").strip()
-    if not forwarded:
-        forwarded = (
-            request.headers.get("X-Forwarded-For", "")
-            .split(",", 1)[0]
-            .strip()
-        )
-    return (forwarded or request.remote_addr or "unknown")[:64]
+    if TRUST_PROXY:
+        forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+        if not forwarded:
+            forwarded = (
+                request.headers.get("X-Forwarded-For", "")
+                .split(",", 1)[0]
+                .strip()
+            )
+        if forwarded:
+            return forwarded[:64]
+    return (request.remote_addr or "unknown")[:64]
 
 
 def _enforce_rate_limit(scope: str, limit: int, window_seconds: int = 3600):
@@ -187,15 +208,50 @@ def enforce_expensive_api_rate_limits():
         return _enforce_rate_limit("ai", AI_RATE_LIMIT_PER_HOUR)
     return None
 
+
 # GitHub 自动同步配置
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "zt130035-lang/shizheng-kb")
 
 # 嵌入向量本地缓存（按文本md5），避免重建时重复请求同一段文本
 _EMBED_CACHE = {}
+_EMBED_CACHE_LOCK = threading.Lock()
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 app.before_request(enforce_expensive_api_rate_limits)
+# 全局上传大小上限,兜底各路由的显式检查
+app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
+
+
+@app.errorhandler(413)
+def _too_large(_err):
+    return jsonify({"error": "上传文件过大,超过30MB限制"}), 413
+
+
+def _check_cron_secret():
+    """统一校验 cron 管理接口密钥;未配置时直接拒绝,避免接口裸奔。"""
+    if not CRON_SECRET:
+        return jsonify({"error": "cron service is not configured"}), 503
+    provided = (
+        request.headers.get("X-Cron-Secret", "").strip()
+        or request.args.get("secret", "").strip()
+    )
+    if not provided or not secrets.compare_digest(provided, CRON_SECRET):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
+
+
+def _require_manual_access():
+    """手动触发类接口的可选鉴权:配置了 MANUAL_SECRET 才要求携带密钥。"""
+    if not MANUAL_SECRET:
+        return None
+    provided = (
+        request.headers.get("X-Manual-Secret", "").strip()
+        or request.args.get("secret", "").strip()
+    )
+    if not provided or not secrets.compare_digest(provided, MANUAL_SECRET):
+        return jsonify({"error": "unauthorized"}), 401
+    return None
 
 
 @app.route("/api/health", methods=["GET"])
@@ -210,7 +266,8 @@ def api_health():
         "service": "beikaobao",
         "version": version,
         "models": {
-            "review": DEEPSEEK_MODEL,
+            "review": REVIEW_MODEL,
+            "prepare": PREPARE_MODEL,
             "vision": VISION_MODEL,
         },
         "limits": {
@@ -222,8 +279,30 @@ def api_health():
 
 # ========== 工具函数 ==========
 
+_GIT_SYNC_LOCK = threading.Lock()
+SYNC_STATE_FILE = os.path.join(DATA_DIR, ".sync_state.json")
+
+
+def _load_sync_state() -> dict:
+    try:
+        with open(SYNC_STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_sync_state(state: dict):
+    try:
+        with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except OSError as e:
+        print(f"[GIT-SYNC] 保存同步状态失败: {e}")
+
+
 def git_sync_to_github(message: str = "auto: sync data"):
-    """将数据文件自动同步到GitHub（通过API，无需本地git）"""
+    """将数据文件增量同步到GitHub(通过API,无需本地git)。
+    内容未变化的文件复用已上传的 blob sha,只为新增/变更文件发请求。"""
     if not GITHUB_TOKEN:
         print("[GIT-SYNC] 未配置 GITHUB_TOKEN，跳过同步")
         return False
@@ -284,35 +363,56 @@ def git_sync_to_github(message: str = "auto: sync data"):
         print(f"[GIT-SYNC] 获取仓库信息失败: {e}")
         return False
 
-    # 创建 blobs 并构建 tree
-    tree_items = []
-    uploaded = 0
-    for local_path, repo_path in sync_files:
-        try:
-            with open(local_path, "rb") as f:
-                content = f.read()
-            b64_content = base64.b64encode(content).decode("utf-8")
-            blob_resp = requests.post(
-                f"{api_base}/git/blobs",
-                headers=headers,
-                json={"content": b64_content, "encoding": "base64"},
-                timeout=30
-            )
-            if blob_resp.status_code == 201:
-                blob_sha = blob_resp.json()["sha"]
-                tree_items.append({
-                    "path": repo_path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": blob_sha
-                })
-                uploaded += 1
-        except Exception as e:
-            print(f"[GIT-SYNC] 上传blob失败 {repo_path}: {e}")
+    # 增量同步:内容未变化的文件复用已上传的 blob,只为新增/变更文件发请求
+    with _GIT_SYNC_LOCK:
+        state = _load_sync_state()
+        tree_entries = {}
+        pending = []
+        for local_path, repo_path in sync_files:
+            try:
+                with open(local_path, "rb") as f:
+                    content = f.read()
+            except OSError as e:
+                print(f"[GIT-SYNC] 读取失败 {repo_path}: {e}")
+                continue
+            digest = hashlib.sha256(content).hexdigest()
+            cached = state.get(repo_path)
+            if cached and isinstance(cached, dict) and cached.get("sha256") == digest and cached.get("blob_sha"):
+                tree_entries[repo_path] = cached["blob_sha"]
+            else:
+                pending.append((local_path, repo_path, content, digest))
 
-    if not tree_items:
-        print("[GIT-SYNC] 无文件上传成功")
-        return False
+        if not pending:
+            print("[GIT-SYNC] 无文件变更,跳过同步")
+            return True
+
+        # 仅为变更文件创建 blob
+        for local_path, repo_path, content, digest in pending:
+            try:
+                b64_content = base64.b64encode(content).decode("utf-8")
+                blob_resp = requests.post(
+                    f"{api_base}/git/blobs",
+                    headers=headers,
+                    json={"content": b64_content, "encoding": "base64"},
+                    timeout=30
+                )
+                if blob_resp.status_code == 201:
+                    blob_sha = blob_resp.json()["sha"]
+                    tree_entries[repo_path] = blob_sha
+                    state[repo_path] = {"sha256": digest, "blob_sha": blob_sha}
+                else:
+                    print(f"[GIT-SYNC] 上传blob失败 {repo_path}: HTTP {blob_resp.status_code}")
+            except Exception as e:
+                print(f"[GIT-SYNC] 上传blob失败 {repo_path}: {e}")
+
+        if not tree_entries:
+            print("[GIT-SYNC] 无文件上传成功")
+            return False
+
+        tree_items = [
+            {"path": path, "mode": "100644", "type": "blob", "sha": sha}
+            for path, sha in tree_entries.items()
+        ]
 
     # 创建新 tree
     try:
@@ -360,7 +460,8 @@ def git_sync_to_github(message: str = "auto: sync data"):
             timeout=15
         )
         if ref_update.status_code == 200:
-            print(f"[GIT-SYNC] ✅ 同步成功！{uploaded}个文件已推送到GitHub")
+            _save_sync_state(state)
+            print(f"[GIT-SYNC] ✅ 同步成功！{len(pending)}个文件变更已推送")
             return True
         else:
             print(f"[GIT-SYNC] 更新ref失败: {ref_update.text[:200]}")
@@ -378,12 +479,13 @@ def get_embedding(texts: List[str]) -> List[List[float]]:
     keys = [hashlib.md5(t.encode("utf-8")).hexdigest() for t in texts]
     cached = {}
     misses, miss_idx = [], []
-    for i, (t, k) in enumerate(zip(texts, keys)):
-        if k in _EMBED_CACHE:
-            cached[i] = _EMBED_CACHE[k]
-        else:
-            misses.append(t)
-            miss_idx.append(i)
+    with _EMBED_CACHE_LOCK:
+        for i, (t, k) in enumerate(zip(texts, keys)):
+            if k in _EMBED_CACHE:
+                cached[i] = _EMBED_CACHE[k]
+            else:
+                misses.append(t)
+                miss_idx.append(i)
 
     if misses:
         fresh = _embedding_request(misses)
@@ -392,7 +494,8 @@ def get_embedding(texts: List[str]) -> List[List[float]]:
             return []
         for local_i, emb in zip(miss_idx, fresh):
             cached[local_i] = emb
-            _EMBED_CACHE[keys[local_i]] = emb
+            with _EMBED_CACHE_LOCK:
+                _EMBED_CACHE[keys[local_i]] = emb
 
     return [cached[i] for i in range(len(texts))]
 
@@ -449,13 +552,23 @@ def rerank_documents(query: str, documents: List[str], top_n: int = 5) -> List[d
 
 
 def get_chroma_client():
-    return chromadb.PersistentClient(path=KNOWLEDGE_DB_DIR)
+    global _client_singleton
+    if _client_singleton is None:
+        _client_singleton = chromadb.PersistentClient(path=KNOWLEDGE_DB_DIR)
+    return _client_singleton
+
+
+_client_singleton = None
+_essay_client_singleton = None
 
 
 def get_essay_chroma_client():
     """Use a separate store so rebuilding essay materials cannot damage the legacy KB."""
+    global _essay_client_singleton
     os.makedirs(ESSAY_KNOWLEDGE_DB_DIR, exist_ok=True)
-    return chromadb.PersistentClient(path=ESSAY_KNOWLEDGE_DB_DIR)
+    if _essay_client_singleton is None:
+        _essay_client_singleton = chromadb.PersistentClient(path=ESSAY_KNOWLEDGE_DB_DIR)
+    return _essay_client_singleton
 
 
 # ========== 新闻爬取共享管线 ==========
@@ -487,7 +600,7 @@ def fetch_news_from_sources(log_prefix: str = "CRAWL", per_source: int = 15) -> 
     for name, base_url, prio in NEWS_SOURCES:
         priority[name] = prio
         try:
-            resp = requests.get(base_url, timeout=15, headers=CRAWL_HEADERS, verify=False)
+            resp = requests.get(base_url, timeout=15, headers=CRAWL_HEADERS)
             if resp.status_code == 200:
                 resp.encoding = 'utf-8'
                 soup = BeautifulSoup(resp.text, 'html.parser')
@@ -571,7 +684,7 @@ def build_topic_digest(log_prefix: str = "CRAWL", max_archives: int = 30) -> str
         print(f"[{log_prefix}] 专题聚合失败")
         return ""
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _now().strftime("%Y-%m-%d")
     fname = f"topics_{today}.md"
     fpath = os.path.join(TOPICS_DIR, fname)
     with open(fpath, "w", encoding="utf-8") as f:
@@ -585,7 +698,7 @@ def build_topic_digest(log_prefix: str = "CRAWL", max_archives: int = 30) -> str
 def build_morning_card(log_prefix: str = "CRON") -> dict:
     """生成「3分钟晨读卡」：当天最该记的3条时政+1句金句+1道自测题。
     返回结构化 dict（含 markdown 与 bark 推送文本），失败返回 {}。"""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _now().strftime("%Y-%m-%d")
     # 优先用当天归档，没有则用最近的
     files = sorted(glob.glob(os.path.join(NEWS_ARCHIVE_DIR, f"{today}_*.md")), reverse=True)
     if not files:
@@ -669,25 +782,31 @@ def build_morning_card(log_prefix: str = "CRON") -> dict:
 
 
 def send_bark(title: str, body: str, group: str = "考公时政") -> bool:
-    """发送 Bark 推送，成功返回True"""
-    bark_key = os.environ.get("BARK_DEVICE_KEY", "")
+    """发送 Bark 推送，成功返回 True。Bark key 必须通过环境变量 BARK_DEVICE_KEY 配置。"""
+    bark_key = os.environ.get("BARK_DEVICE_KEY", "").strip()
+    bark_server = os.environ.get("BARK_SERVER", "https://api.day.app").rstrip("/")
     if not bark_key:
+        print("[BARK] 未配置 BARK_DEVICE_KEY，跳过推送")
         return False
     try:
-        requests.post(f"https://api.day.app/{bark_key}", json={
+        resp = requests.post(f"{bark_server}/{bark_key}", json={
             "title": title,
             "body": body[:3500],
             "group": group,
         }, timeout=10)
+        if resp.status_code >= 400:
+            print(f"[BARK] 推送失败: HTTP {resp.status_code} {resp.text[:200]}")
+            return False
         return True
     except Exception as e:
         print(f"[BARK] 推送失败: {e}")
         return False
 
-
-
-def call_deepseek(prompt: str, system: str = "") -> str:
-    """调用DeepSeek AI"""
+def call_deepseek(prompt: str, system: str = "", timeout: int = 120, max_tokens: int = None, model: str = None) -> str:
+    """调用 OpenAI 兼容的 chat/completions 接口(默认 DeepSeek)。
+    timeout 默认 120s(长批改任务请显式传更大的值);
+    max_tokens 传值时限制输出长度,避免长输出被截断;
+    model 传值时覆盖全局 DEEPSEEK_MODEL(用于审题/批改分模型)。"""
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
@@ -696,32 +815,50 @@ def call_deepseek(prompt: str, system: str = "") -> str:
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    payload = {"model": DEEPSEEK_MODEL, "messages": messages, "temperature": 0.3}
+    payload = {"model": model or DEEPSEEK_MODEL, "messages": messages, "temperature": 0.3}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
     try:
         resp = requests.post(
             DEEPSEEK_API_URL,
-            headers=headers, json=payload, timeout=60
+            headers=headers, json=payload, timeout=timeout
         )
-        if not resp.ok:
+        if resp.status_code >= 400:
             detail = resp.text[:500] if resp.text else ""
-            return f"AI调用失败: HTTP {resp.status_code}，模型={DEEPSEEK_MODEL}，{detail}"
+            return f"AI调用失败: HTTP {resp.status_code}，模型={model or DEEPSEEK_MODEL}，{detail}"
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"AI调用失败: {e}"
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
-    """将长文本分块"""
+    """将长文本按自然边界(段落/句号)分块,避免在句子中间硬切。
+    overlap 参数保留以兼容调用方;超长单元(如无标点的长段落)才硬切。"""
+    text = (text or "").strip()
+    if not text:
+        return []
     if len(text) <= chunk_size:
-        return [text] if text.strip() else []
+        return [text]
+
+    units = [u.strip() for u in re.split(r"\n|(?<=[。！？；;])", text) if u.strip()]
     chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        start += chunk_size - overlap
+    current = ""
+    for unit in units:
+        if len(unit) > chunk_size:
+            if current:
+                chunks.append(current)
+                current = ""
+            for start in range(0, len(unit), chunk_size):
+                chunks.append(unit[start:start + chunk_size])
+            continue
+        if len(current) + len(unit) <= chunk_size:
+            current += unit
+        else:
+            if current:
+                chunks.append(current)
+            current = unit
+    if current:
+        chunks.append(current)
     return chunks
 
 
@@ -807,11 +944,108 @@ def _essay_section_chunks(content: str) -> list:
     return result
 
 
+_GUIDANCE_CACHE = {"key": None, "content": ""}
+
+
+# 批改缓存:完全相同的输入在 TTL 内直接返回,重复提交/重复练习秒回。
+# 内存 + 磁盘双写(原子落盘、启动加载),重启进程不丢审题/批改结果。
+_REVIEW_CACHE = {}
+_REVIEW_CACHE_LOCK = threading.Lock()
+_REVIEW_CACHE_FILE = os.path.join(DATA_DIR, "review_cache.json")
+_REVIEW_CACHE_TTL = int(os.environ.get("REVIEW_CACHE_TTL", "600"))
+# 审题要点缓存:同一试卷换作答复用时复用,价值高,用长 TTL
+_PREPARE_CACHE_TTL = int(os.environ.get("PREPARE_CACHE_TTL", "86400"))
+_REVIEW_CACHE_MAX = int(os.environ.get("REVIEW_CACHE_MAX", "80"))
+
+
+def _load_review_cache():
+    """启动时从磁盘加载持久化缓存,丢弃已过期条目。"""
+    try:
+        with open(_REVIEW_CACHE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    now = time.time()
+    loaded = {}
+    for key, entry in raw.items():
+        if not isinstance(entry, dict) or "payload" not in entry:
+            continue
+        try:
+            exp = float(entry.get("exp", 0))
+            ts = float(entry.get("ts", 0))
+        except (TypeError, ValueError):
+            continue
+        if exp > now:
+            loaded[key] = (ts, entry["payload"], exp)
+    with _REVIEW_CACHE_LOCK:
+        for key, entry in loaded.items():
+            _REVIEW_CACHE[key] = entry
+    if loaded:
+        print(f"[CACHE] 已加载 {len(loaded)} 条批改缓存")
+
+
+def _save_review_cache():
+    """原子落盘:先写临时文件再 rename,避免写一半损坏。"""
+    with _REVIEW_CACHE_LOCK:
+        snapshot = dict(_REVIEW_CACHE)
+    now = time.time()
+    data = {}
+    for key, (ts, payload, exp) in snapshot.items():
+        if exp > now:
+            data[key] = {"ts": ts, "exp": exp, "payload": payload}
+    try:
+        tmp = _REVIEW_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _REVIEW_CACHE_FILE)
+    except OSError as e:
+        print(f"[CACHE] 落盘失败: {e}")
+
+
+def _review_cache_key(*parts) -> str:
+    return hashlib.md5("|".join(str(p) for p in parts).encode("utf-8")).hexdigest()
+
+
+def _review_cache_get(key: str):
+    with _REVIEW_CACHE_LOCK:
+        entry = _REVIEW_CACHE.get(key)
+        if not entry:
+            return None
+        if time.time() > entry[2]:
+            _REVIEW_CACHE.pop(key, None)
+            return None
+        return entry[1]
+
+
+def _review_cache_set(key: str, value, ttl: int = None):
+    if ttl is None:
+        ttl = _REVIEW_CACHE_TTL
+    with _REVIEW_CACHE_LOCK:
+        _REVIEW_CACHE[key] = (time.monotonic(), value, time.time() + ttl)
+        if len(_REVIEW_CACHE) > _REVIEW_CACHE_MAX:
+            oldest = min(_REVIEW_CACHE, key=lambda k: _REVIEW_CACHE[k][0])
+            _REVIEW_CACHE.pop(oldest, None)
+    _save_review_cache()
+
+
+_load_review_cache()
+
+
 def _load_essay_guidance(max_chars: int = 7000) -> str:
     """Load reviewed Obsidian rules and style as fixed essay-review guidance."""
     paths = []
     for directory in [os.path.join(ESSAY_VAULT_DIR, "评分标准"), os.path.join(ESSAY_VAULT_DIR, "批改风格")]:
         paths.extend(sorted(glob.glob(os.path.join(directory, "*.md"))))
+
+    # mtime 指纹:文件变化才重读,避免每次请求都读盘
+    try:
+        fingerprint = tuple((p, os.path.getmtime(p)) for p in paths)
+    except OSError:
+        fingerprint = tuple(paths)
+    if fingerprint == _GUIDANCE_CACHE.get("key"):
+        return _GUIDANCE_CACHE["content"][:max_chars]
 
     parts = []
     for filepath in paths:
@@ -825,7 +1059,10 @@ def _load_essay_guidance(max_chars: int = 7000) -> str:
             parts.append(f"【申论规则：{title}】\n{content}")
         except Exception:
             continue
-    return "\n\n".join(parts)[:max_chars]
+    content = "\n\n".join(parts)
+    _GUIDANCE_CACHE["key"] = fingerprint
+    _GUIDANCE_CACHE["content"] = content
+    return content[:max_chars]
 
 
 def _rebuild_essay_materials() -> dict:
@@ -876,7 +1113,7 @@ def _rebuild_essay_materials() -> dict:
             pass
         collection = client.get_or_create_collection(
             name=ESSAY_MATERIALS_COLLECTION,
-            metadata={"description": "申论专题素材、评分规则、批改案例和表达风格"},
+            metadata={"description": "申论专题素材、评分规则、批改案例和表达风格", "hnsw:space": "cosine"},
         )
 
         batch_size = 30
@@ -1030,6 +1267,27 @@ def _full_review_markdown(report: dict) -> str:
     return "\n".join(lines).strip()
 
 
+def _resolve_within(directory: str, name: str) -> str:
+    """把 name 安全解析到 directory 内,防路径穿越;越界返回空串。"""
+    base = os.path.realpath(directory)
+    target = os.path.realpath(os.path.join(directory, os.path.normpath(name or "")))
+    if target == base or target.startswith(base + os.sep):
+        return target
+    return ""
+
+
+def _distance_to_score(space: str, dist: float) -> float:
+    """把向量距离映射为 0-1 展示分数(仅用于展示,不参与排序)。"""
+    try:
+        dist = float(dist)
+    except (TypeError, ValueError):
+        return 0.0
+    if space == "cosine":
+        return max(0.0, min(1.0, round(1.0 - dist, 4)))
+    # L2:单调映射到 [0,1],保持"距离越小越相关"的语义
+    return max(0.0, min(1.0, round(1.0 / (1.0 + dist), 4)))
+
+
 def sanitize_collection_name(name: str) -> str:
     """将用户输入的名称转为ChromaDB合法集合名
     ChromaDB要求: 3-512字符, [a-zA-Z0-9._-], 首尾必须是[a-zA-Z0-9]
@@ -1042,18 +1300,39 @@ def sanitize_collection_name(name: str) -> str:
     return f"kb_{h}"
 
 
-def load_user_data() -> dict:
-    """加载用户数据"""
-    if os.path.exists(USER_DATA_FILE):
-        with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
+def _request_uid() -> str:
+    """从请求解析用户标识(Header X-User-Id 或 body/query 的 user_id);空串=匿名(使用全局文件,兼容现状)。"""
+    uid = request.headers.get("X-User-Id", "").strip()
+    if not uid and request.args.get("user_id"):
+        uid = request.args.get("user_id", "").strip()
+    if not uid and request.is_json:
+        data = request.get_json(silent=True) or {}
+        uid = str(data.get("user_id", "") or "").strip()
+    return uid[:64]
+
+
+def _user_data_path(uid: str = "") -> str:
+    if uid:
+        return os.path.join(DATA_DIR, f"user_data_{hashlib.md5(uid.encode('utf-8')).hexdigest()[:12]}.json")
+    return USER_DATA_FILE
+
+
+def load_user_data(uid: str = "") -> dict:
+    """加载用户数据;传入 uid 时按用户隔离,避免多用户互相覆盖。"""
+    path = _user_data_path(uid)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     return {"wrong_questions": [], "quiz_history": [], "favorites": []}
 
 
-def save_user_data(data: dict):
-    """保存用户数据"""
-    with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
+def save_user_data(data: dict, uid: str = ""):
+    """保存用户数据(原子写:先写临时文件再 rename,避免并发写损坏)。"""
+    path = _user_data_path(uid)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
 
 
 # ========== API 路由 ==========
@@ -1064,45 +1343,44 @@ def index():
 
 
 # --- 手动爬取新闻 ---
-@app.route("/api/crawl", methods=["POST"])
-def crawl_news():
-    """手动触发一次新闻爬取（内置逻辑，无需外部脚本）"""
-    import threading
+def run_crawl_pipeline(log_prefix: str = "CRAWL", push_morning_card: bool = False):
+    """共享爬取管线:抓取 → AI分析归档 → 日报 → 向量入库 → 晨读卡(可选) → 专题 → GitHub同步。
+    手动触发与 cron 定时任务共用同一实现,避免两套逻辑漂移。"""
+    today = _now().strftime("%Y-%m-%d")
+    print(f"[{log_prefix}] 开始爬取 {today}")
 
-    def do_manual_crawl():
-        today = datetime.now().strftime("%Y-%m-%d")
-        print(f"[CRAWL] 开始手动爬取 {today}")
+    sorted_news = fetch_news_from_sources(log_prefix)
+    if not sorted_news:
+        print(f"[{log_prefix}] 未获取到新闻")
+        if log_prefix == "CRON":
+            send_bark("⚠️ 时政爬取失败", f"{today} 未获取到新闻,请检查新闻源", "系统告警")
+        return
+    sorted_news = sorted_news[:15]
 
-        sorted_news = fetch_news_from_sources("CRAWL")
-        if not sorted_news:
-            print("[CRAWL] 未获取到新闻")
-            return
-        sorted_news = sorted_news[:15]
+    # 1. 保存新闻(AI分析),已存在则跳过
+    saved_files = []
+    for i, (title, info) in enumerate(sorted_news[:8]):
+        safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:40]
+        filename = f"{today}_{i+1:02d}_{safe_title}.md"
+        filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
+        if os.path.exists(filepath):
+            continue
+        prompt = f"请根据以下新闻标题，生成一份完整的时政新闻扩展分析（300-500字）：\n\n新闻标题：{title}\n\n请按以下格式输出：\n\n## 📌 新闻背景\n[2-3句背景介绍]\n\n## 📖 核心内容\n[新闻的具体内容扩展]\n\n## 🎯 考公考点\n- 申论角度：[可用主题]\n- 行测考点：[可能出题方向]\n\n## 💡 规范表述\n[2-3句官方标准表述]"
+        analysis = call_deepseek(prompt, "你是公考时政分析专家")
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(f"# {title}\n\n")
+            f.write(f"**日期**：{today}\n")
+            f.write(f"**来源**：{info['source']}\n")
+            if info['url']:
+                f.write(f"**原文链接**：{info['url']}\n")
+            f.write("\n---\n\n")
+            f.write(analysis)
+        saved_files.append(filepath)
+        print(f"[{log_prefix}] 已保存: {filename}")
 
-        # 保存新闻（AI分析）
-        saved_files = []
-        for i, (title, info) in enumerate(sorted_news[:8]):
-            safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:40]
-            filename = f"{today}_{i+1:02d}_{safe_title}.md"
-            filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
-            if os.path.exists(filepath):
-                continue
-            prompt = f"请根据以下新闻标题，生成一份完整的时政新闻扩展分析（300-500字）：\n\n新闻标题：{title}\n\n请按以下格式输出：\n\n## 📌 新闻背景\n[2-3句背景介绍]\n\n## 📖 核心内容\n[新闻的具体内容扩展]\n\n## 🎯 考公考点\n- 申论角度：[可用主题]\n- 行测考点：[可能出题方向]\n\n## 💡 规范表述\n[2-3句官方标准表述]"
-            analysis = call_deepseek(prompt, "你是公考时政分析专家")
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"# {title}\n\n")
-                f.write(f"**日期**：{today}\n")
-                f.write(f"**来源**：{info['source']}\n")
-                if info['url']:
-                    f.write(f"**原文链接**：{info['url']}\n")
-                f.write("\n---\n\n")
-                f.write(analysis)
-            saved_files.append(filepath)
-            print(f"[CRAWL] 已保存: {filename}")
-
-        # 生成日报
-        formatted = "\n".join([f"{i+1}. 【{info['source']}】{title}" for i, (title, info) in enumerate(sorted_news)])
-        report_prompt = f"""请分析以下时政新闻，按指定格式输出。
+    # 2. 生成日报
+    formatted = "\n".join([f"{i+1}. 【{info['source']}】{title}" for i, (title, info) in enumerate(sorted_news)])
+    report_prompt = f"""请分析以下时政新闻，按指定格式输出。
 
 【今日新闻】
 {formatted}
@@ -1140,52 +1418,82 @@ A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
 A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
 答案：[_]
 """
-        report = call_deepseek(report_prompt, "你是一个公考时政分析专家。请严格按照要求的格式输出分析结果。")
-        report_path = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{today}.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(f"# 📰 {today} 时政日报\n\n")
-            f.write(report)
-        print(f"[CRAWL] 日报已生成: {report_path}")
+    report = call_deepseek(report_prompt, "你是一个公考时政分析专家。请严格按照要求的格式输出分析结果。")
+    report_path = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{today}.md")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(f"# 📰 {today} 时政日报\n\n")
+        f.write(report)
+    print(f"[{log_prefix}] 日报已生成: {report_path}")
 
-        # 嵌入知识库
-        if saved_files:
-            try:
-                client = get_chroma_client()
-                collection = client.get_or_create_collection(
-                    name="shizheng_news",
-                    metadata={"description": "考公时政新闻知识库"}
+    # 3. 嵌入知识库(批量提交,避免逐 chunk 请求嵌入 API)
+    if saved_files:
+        try:
+            collection = get_chroma_client().get_or_create_collection(
+                name="shizheng_news",
+                metadata={"description": "考公时政新闻知识库", "hnsw:space": "cosine"},
+            )
+            batch = []
+            for filepath in saved_files:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                fname = os.path.basename(filepath).replace(".md", "")
+                date_match = re.match(r"(\d{4}-\d{2}-\d{2})", fname)
+                for j, chunk in enumerate(chunk_text(content)):
+                    batch.append((chunk, f"{fname}_chunk_{j}", {
+                        "title": fname,
+                        "date": date_match.group(1) if date_match else today,
+                        "source": "新闻归档",
+                    }))
+            for start in range(0, len(batch), 30):
+                sub = batch[start:start + 30]
+                embs = get_embedding([item[0] for item in sub])
+                if not embs or len(embs) != len(sub):
+                    print(f"[{log_prefix}] 批次 {start}-{start + len(sub)} 嵌入失败,跳过")
+                    continue
+                collection.add(
+                    ids=[item[1] for item in sub],
+                    documents=[item[0] for item in sub],
+                    embeddings=embs,
+                    metadatas=[item[2] for item in sub],
                 )
-                for filepath in saved_files:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    chunks = chunk_text(content)
-                    if not chunks:
-                        continue
-                    embeddings = get_embedding(chunks)
-                    if not embeddings:
-                        continue
-                    fname = os.path.basename(filepath).replace(".md", "")
-                    ids = [f"{fname}_chunk_{j}" for j in range(len(chunks))]
-                    collection.add(documents=chunks, embeddings=embeddings, ids=ids)
-                print(f"[CRAWL] 知识库已更新，新增{len(saved_files)}篇")
-            except Exception as e:
-                print(f"[CRAWL] 知识库嵌入失败: {e}")
-
-        # 生成时政热点专题素材包
-        try:
-            build_topic_digest("CRAWL")
+            print(f"[{log_prefix}] 知识库已更新,新增{len(saved_files)}篇")
         except Exception as e:
-            print(f"[CRAWL] 专题聚合失败: {e}")
+            print(f"[{log_prefix}] 知识库嵌入失败: {e}")
 
-        # 自动同步到GitHub（数据持久化）
+    # 4. 晨读卡 + Bark 推送(仅 cron 定时任务推送)
+    if push_morning_card:
         try:
-            git_sync_to_github(f"auto: 手动爬取 {today}")
+            card = build_morning_card(log_prefix)
+            if card:
+                send_bark(f"☀️ 时政晨读 {today}", card.get("bark_body", ""), "时政晨读")
+                print(f"[{log_prefix}] 晨读卡已推送")
+            else:
+                send_bark(f"📰 时政日报 {today}", report[:3500], "时政日报")
         except Exception as e:
-            print(f"[CRAWL] GitHub同步失败: {e}")
+            print(f"[{log_prefix}] 晨读卡/推送失败: {e}")
 
-        print(f"[CRAWL] 手动爬取完成")
+    # 5. 生成时政热点专题素材包
+    try:
+        build_topic_digest(log_prefix)
+    except Exception as e:
+        print(f"[{log_prefix}] 专题聚合失败: {e}")
 
-    thread = threading.Thread(target=do_manual_crawl)
+    # 6. 自动同步到GitHub(数据持久化)
+    try:
+        git_sync_to_github(f"auto: 手动爬取 {today}" if log_prefix == "CRAWL" else f"auto: 每日爬取 {today}")
+    except Exception as e:
+        print(f"[{log_prefix}] GitHub同步失败: {e}")
+
+    print(f"[{log_prefix}] 爬取完成")
+
+
+@app.route("/api/crawl", methods=["POST"])
+def crawl_news():
+    """手动触发一次新闻爬取（内置逻辑，无需外部脚本）"""
+    denied = _require_manual_access()
+    if denied:
+        return denied
+    thread = threading.Thread(target=run_crawl_pipeline, kwargs={"log_prefix": "CRAWL"}, daemon=True)
     thread.start()
     return jsonify({"success": True, "output": "爬取任务已启动，预计1-2分钟完成。刷新页面查看结果。"})
 
@@ -1214,8 +1522,8 @@ def list_archives():
 @app.route("/api/archives/<path:filename>")
 def get_archive(filename):
     """获取单篇新闻全文，拆分为原文和解析两部分"""
-    filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(NEWS_ARCHIVE_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "文件不存在"}), 404
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -1286,8 +1594,8 @@ def list_reports():
 @app.route("/api/reports/<path:filename>")
 def get_report(filename):
     """获取日报内容"""
-    filepath = os.path.join(DAILY_REPORTS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(DAILY_REPORTS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "文件不存在"}), 404
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -1312,8 +1620,8 @@ def list_topics():
 @app.route("/api/topics/<path:filename>")
 def get_topic(filename):
     """获取单个专题素材包内容"""
-    filepath = os.path.join(TOPICS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(TOPICS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "文件不存在"}), 404
     with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
@@ -1324,8 +1632,9 @@ def get_topic(filename):
 @app.route("/api/topics/generate", methods=["POST", "GET"])
 def generate_topic():
     """手动触发生成时政热点专题（同步执行，方便立即查看）"""
-    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
-    # 允许前端不带secret调用（与手动爬取一致的开放程度）
+    denied = _require_manual_access()
+    if denied:
+        return denied
     fname = build_topic_digest("MANUAL")
     if not fname:
         return jsonify({"error": "暂无归档新闻可供聚合，请先爬取新闻"}), 400
@@ -1353,8 +1662,8 @@ def list_morning_cards():
 @app.route("/api/morning-cards/<path:filename>")
 def get_morning_card(filename):
     """获取单张晨读卡（结构化数据 + html）"""
-    filepath = os.path.join(MORNING_CARDS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(MORNING_CARDS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "文件不存在"}), 404
     with open(filepath, "r", encoding="utf-8") as f:
         card = json.load(f)
@@ -1365,6 +1674,9 @@ def get_morning_card(filename):
 @app.route("/api/morning-cards/generate", methods=["POST", "GET"])
 def generate_morning_card():
     """手动触发生成今日晨读卡"""
+    denied = _require_manual_access()
+    if denied:
+        return denied
     card = build_morning_card("MANUAL")
     if not card:
         return jsonify({"error": "暂无归档新闻，请先爬取新闻"}), 400
@@ -1386,7 +1698,10 @@ def query_kb():
     data = request.json
     question = data.get("question", "").strip()
     collection_name = data.get("collection", "shizheng_news")
-    top_k = data.get("top_k", 5)
+    try:
+        top_k = max(1, min(int(data.get("top_k", 5)), 20))
+    except (TypeError, ValueError):
+        top_k = 5
 
     if not question:
         return jsonify({"error": "请输入查询问题"}), 400
@@ -1429,13 +1744,14 @@ def query_kb():
             })
     else:
         # rerank失败时回退到向量相似度顺序
+        space = (collection.metadata or {}).get("hnsw:space", "l2")
         for doc, meta, dist in list(zip(docs, metas, dists))[:top_k]:
             items.append({
                 "content": doc,
                 "title": meta.get("title", ""),
                 "date": meta.get("date", ""),
                 "source": meta.get("source", ""),
-                "score": round(1 - dist, 4),
+                "score": _distance_to_score(space, dist),
                 "reranked": False
             })
     return jsonify({"question": question, "results": items})
@@ -1462,7 +1778,7 @@ def upload_pdf():
     file = request.files["file"]
     if not file.filename.lower().endswith(".pdf"):
         return jsonify({"error": "仅支持PDF文件"}), 400
-    filename = secure_filename(file.filename) or f"upload_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+    filename = secure_filename(file.filename) or f"upload_{_now().strftime('%Y%m%d%H%M%S')}.pdf"
     # 保留中文文件名
     if file.filename:
         filename = file.filename.replace("/", "_").replace("\\", "_")
@@ -1479,11 +1795,50 @@ def import_pdf():
     """手动将已有PDF导入知识库"""
     data = request.json
     filename = data.get("filename", "")
-    filepath = os.path.join(PDF_UPLOADS_DIR, filename)
+    filepath = _resolve_within(PDF_UPLOADS_DIR, filename)
+    if not filepath:
+        return jsonify({"error": "非法文件名"}), 400
     if not os.path.exists(filepath):
         return jsonify({"error": "文件不存在"}), 404
     result = import_pdf_to_kb(filepath, filename)
     return jsonify({"message": result})
+
+
+PDF_IMPORTED_INDEX_FILE = os.path.join(DATA_DIR, "pdf_imported_index.json")
+
+
+def _load_pdf_imported_index() -> dict:
+    try:
+        with open(PDF_IMPORTED_INDEX_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_pdf_imported_index(index: dict):
+    try:
+        with open(PDF_IMPORTED_INDEX_FILE, "w", encoding="utf-8") as f:
+            json.dump(index, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _ensure_pdf_imported_index(collection) -> dict:
+    """首次运行:从现有集合的 ids 一次性迁移已导入的 PDF 前缀,之后增量维护。"""
+    index = _load_pdf_imported_index()
+    if index or not os.path.exists(PDF_IMPORTED_INDEX_FILE):
+        return index
+    try:
+        existing = collection.get()
+        for eid in existing.get("ids", []):
+            prefix = re.sub(r"_p\d+$", "", eid)
+            if prefix and prefix != eid:
+                index[prefix] = True
+        _save_pdf_imported_index(index)
+    except Exception as e:
+        print(f"[PDF-INDEX] 迁移索引失败: {e}")
+    return index
 
 
 def import_pdf_to_kb(filepath: str, filename: str) -> str:
@@ -1501,14 +1856,13 @@ def import_pdf_to_kb(filepath: str, filename: str) -> str:
         client = get_chroma_client()
         collection = client.get_or_create_collection(
             name="shizheng_news",
-            metadata={"description": "考公时政新闻知识库"}
+            metadata={"description": "考公时政新闻知识库", "hnsw:space": "cosine"}
         )
 
-        # 检查是否已导入过（用文件名前缀去重）
-        existing = collection.get()
-        existing_ids = set(existing["ids"]) if existing["ids"] else set()
+        # 检查是否已导入过（用本地索引,避免每次全量拉取整个集合）
+        index = _ensure_pdf_imported_index(collection)
         prefix = filename.replace(".pdf", "")
-        if any(eid.startswith(prefix) for eid in existing_ids):
+        if prefix in index:
             return "该PDF已导入过知识库"
 
         # 批量嵌入（每批20条）
@@ -1523,8 +1877,10 @@ def import_pdf_to_kb(filepath: str, filename: str) -> str:
 
         # 写入
         chunk_ids = [f"{prefix}_p{i}" for i in range(len(chunks))]
-        metadatas = [{"title": filename, "date": datetime.now().strftime("%Y-%m-%d"), "source": "PDF导入"} for _ in chunks]
+        metadatas = [{"title": filename, "date": _now().strftime("%Y-%m-%d"), "source": "PDF导入"} for _ in chunks]
         collection.add(ids=chunk_ids, documents=chunks, embeddings=all_embeddings, metadatas=metadatas)
+        index[prefix] = True
+        _save_pdf_imported_index(index)
         return f"已将 {len(chunks)} 段内容导入知识库"
     except Exception as e:
         return f"导入失败: {e}"
@@ -1539,8 +1895,8 @@ def extract_pdf_questions():
     page_end = data.get("page_end", None)
     num_questions = data.get("num_questions", 5)
 
-    filepath = os.path.join(PDF_UPLOADS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(PDF_UPLOADS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "PDF文件不存在"}), 404
 
     # 提取指定页范围文本
@@ -1655,21 +2011,20 @@ def ai_generate_questions_from_pdf(filepath: str) -> list:
     """当PDF无可提取文本时，使用AI根据PDF内容生成题目
     对于扫描件等图片PDF，先尝试用fitz提取图片描述，再用AI出题
     """
-    # 尝试提取PDF中每页的文本（即使很少）
-    doc = fitz.open(filepath)
-    page_count = len(doc)
-    # 获取文件名作为主题参考
-    filename = os.path.basename(filepath)
-    topic = re.sub(r'\.(pdf|PDF)$', '', filename)
-    topic = re.sub(r'[_\-]', ' ', topic)
+    # 尝试提取PDF中每页的文本（即使很少）;with 保证异常时也关闭文档
+    with fitz.open(filepath) as doc:
+        page_count = len(doc)
+        # 获取文件名作为主题参考
+        filename = os.path.basename(filepath)
+        topic = re.sub(r'\.(pdf|PDF)$', '', filename)
+        topic = re.sub(r'[_\-]', ' ', topic)
 
-    # 尝试提取少量文本作为上下文
-    sparse_text = ""
-    for page in doc:
-        t = page.get_text().strip()
-        if t:
-            sparse_text += t + "\n"
-    doc.close()
+        # 尝试提取少量文本作为上下文
+        sparse_text = ""
+        for page in doc:
+            t = page.get_text().strip()
+            if t:
+                sparse_text += t + "\n"
 
     # 构建prompt
     if sparse_text and len(sparse_text) > 50:
@@ -1707,43 +2062,30 @@ def ai_generate_questions_from_pdf(filepath: str) -> list:
 
 
 def _parse_ai_questions_response(text: str) -> list:
-    """解析AI返回的题目JSON"""
-    # 尝试直接解析
-    text = text.strip()
-    # 去除可能的markdown代码块标记
-    if text.startswith("```"):
-        text = re.sub(r'^```(?:json)?\s*\n?', '', text)
-        text = re.sub(r'\n?```\s*$', '', text)
-    text = text.strip()
+    """解析AI返回的题目JSON(复用 _parse_json_loose 的宽松解析)"""
+    def _valid(questions):
+        valid = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            if all(k in q for k in ("id", "question", "options", "answer")):
+                if isinstance(q["options"], dict) and len(q["options"]) >= 2:
+                    valid.append(q)
+        return valid
 
-    try:
-        questions = json.loads(text)
-        if isinstance(questions, list):
-            # 验证格式
-            valid = []
-            for q in questions:
-                if all(k in q for k in ("id", "question", "options", "answer")):
-                    if isinstance(q["options"], dict) and len(q["options"]) >= 2:
-                        valid.append(q)
-            return valid
-    except json.JSONDecodeError:
-        pass
+    parsed = _parse_json_loose(text)
+    if isinstance(parsed, list):
+        return _valid(parsed)
 
-    # 尝试从文本中提取JSON数组
-    match = re.search(r'\[[\s\S]*\]', text)
+    # 兜底:提取 JSON 数组片段
+    match = re.search(r'\[[\s\S]*\]', text or "")
     if match:
         try:
             questions = json.loads(match.group())
             if isinstance(questions, list):
-                valid = []
-                for q in questions:
-                    if all(k in q for k in ("id", "question", "options", "answer")):
-                        if isinstance(q["options"], dict) and len(q["options"]) >= 2:
-                            valid.append(q)
-                return valid
+                return _valid(questions)
         except json.JSONDecodeError:
             pass
-
     return []
 
 
@@ -1917,13 +2259,24 @@ def _parse_format_standard(text: str) -> list:
     return questions
 
 
+def _extract_or_generate_questions(filepath: str):
+    """从PDF提取题目;无文本或格式无法识别时改用AI生成。返回 (questions, ai_generated)。"""
+    text = extract_pdf_text(filepath)
+    if not text.strip():
+        return ai_generate_questions_from_pdf(filepath), True
+    questions = parse_questions_from_text(text)
+    if questions:
+        return questions, False
+    return ai_generate_questions_from_pdf(filepath), True
+
+
 @app.route("/api/pdf/extract-questions", methods=["POST"])
 def extract_questions_from_pdf():
     """从PDF中提取所有选择题，保存到本地JSON"""
     data = request.json
     filename = data.get("filename", "")
-    filepath = os.path.join(PDF_UPLOADS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(PDF_UPLOADS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "PDF文件不存在"}), 404
 
     # 检查是否已提取过
@@ -1934,21 +2287,8 @@ def extract_questions_from_pdf():
             existing = json.load(f)
         return jsonify({"message": f"已提取过，共{len(existing)}题", "count": len(existing), "questions": existing})
 
-    # 提取PDF全文
-    text = extract_pdf_text(filepath)
-    ai_generated = False
-
-    if not text.strip():
-        # 无可提取文本，使用AI生成题目
-        questions = ai_generate_questions_from_pdf(filepath)
-        ai_generated = True
-    else:
-        # 解析题目
-        questions = parse_questions_from_text(text)
-        if not questions:
-            # 有文本但无法识别题目格式，也用AI出题
-            questions = ai_generate_questions_from_pdf(filepath)
-            ai_generated = True
+    # 提取PDF全文(无文本或格式无法识别时自动改用AI生成)
+    questions, ai_generated = _extract_or_generate_questions(filepath)
 
     if not questions:
         return jsonify({"error": "未能提取或生成题目，请检查PDF内容"}), 400
@@ -1973,8 +2313,8 @@ def get_pdf_questions():
     """获取某PDF已提取的题目"""
     filename = request.args.get("filename", "")
     safe_name = re.sub(r'[^\w\-.]', '_', filename)
-    json_path = os.path.join(PDF_QUESTIONS_DIR, safe_name + ".json")
-    if not os.path.exists(json_path):
+    json_path = _resolve_within(PDF_QUESTIONS_DIR, safe_name + ".json")
+    if not json_path or not os.path.exists(json_path):
         return jsonify({"questions": [], "count": 0})
     with open(json_path, "r", encoding="utf-8") as f:
         questions = json.load(f)
@@ -2042,20 +2382,10 @@ def reextract_questions():
     if os.path.exists(json_path):
         os.remove(json_path)
     # 重新提取
-    filepath = os.path.join(PDF_UPLOADS_DIR, filename)
-    if not os.path.exists(filepath):
+    filepath = _resolve_within(PDF_UPLOADS_DIR, filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({"error": "PDF文件不存在"}), 404
-    text = extract_pdf_text(filepath)
-    ai_generated = False
-
-    if not text.strip():
-        questions = ai_generate_questions_from_pdf(filepath)
-        ai_generated = True
-    else:
-        questions = parse_questions_from_text(text)
-        if not questions:
-            questions = ai_generate_questions_from_pdf(filepath)
-            ai_generated = True
+    questions, ai_generated = _extract_or_generate_questions(filepath)
 
     if not questions:
         return jsonify({"error": "未能提取或生成题目"}), 400
@@ -2106,7 +2436,7 @@ def create_collection():
     client = get_chroma_client()
     try:
         collection = client.get_or_create_collection(
-            name=col_name, metadata={"description": description, "display_name": display_name}
+            name=col_name, metadata={"description": description, "display_name": display_name, "hnsw:space": "cosine"}
         )
         return jsonify({"name": col_name, "display_name": display_name, "count": collection.count(), "message": "创建成功"})
     except Exception as e:
@@ -2129,8 +2459,8 @@ def upload_to_collection(name):
         return jsonify({"error": f"知识库 '{name}' 不存在"}), 404
 
     chunks = chunk_text(text)
-    chunk_ids = [f"{title}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}" for i in range(len(chunks))]
-    metadatas = [{"title": title, "date": datetime.now().strftime("%Y-%m-%d"), "source": "手动上传"} for _ in chunks]
+    chunk_ids = [f"{title}_{_now().strftime('%Y%m%d%H%M%S')}_{i}" for i in range(len(chunks))]
+    metadatas = [{"title": title, "date": _now().strftime("%Y-%m-%d"), "source": "手动上传"} for _ in chunks]
 
     embeddings = get_embedding(chunks)
     if not embeddings:
@@ -2157,28 +2487,31 @@ def delete_collection(name):
 @app.route("/api/wrong-book")
 def get_wrong_book():
     """获取错题列表"""
-    data = load_user_data()
+    data = load_user_data(_request_uid())
     return jsonify(data.get("wrong_questions", []))
 
 
 @app.route("/api/wrong-book", methods=["POST"])
 def add_wrong_question():
     """添加错题"""
-    data = load_user_data()
+    uid = _request_uid()
+    data = load_user_data(uid)
     item = request.json
-    item["id"] = hashlib.md5(f"{item.get('question','')}{datetime.now()}".encode()).hexdigest()[:12]
-    item["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    item.pop("user_id", None)
+    item["id"] = hashlib.md5(f"{item.get('question','')}{_now()}".encode()).hexdigest()[:12]
+    item["time"] = _now().strftime("%Y-%m-%d %H:%M:%S")
     data.setdefault("wrong_questions", []).insert(0, item)
-    save_user_data(data)
+    save_user_data(data, uid)
     return jsonify({"message": "已加入错题本"})
 
 
 @app.route("/api/wrong-book/<qid>", methods=["DELETE"])
 def remove_wrong_question(qid):
     """移除错题（已掌握）"""
-    data = load_user_data()
+    uid = _request_uid()
+    data = load_user_data(uid)
     data["wrong_questions"] = [q for q in data.get("wrong_questions", []) if q.get("id") != qid]
-    save_user_data(data)
+    save_user_data(data, uid)
     return jsonify({"message": "已移除"})
 
 
@@ -2186,13 +2519,15 @@ def remove_wrong_question(qid):
 @app.route("/api/quiz-history", methods=["POST"])
 def add_quiz_history():
     """记录一次做题"""
-    data = load_user_data()
+    uid = _request_uid()
+    data = load_user_data(uid)
     record = request.json
-    record["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    record.pop("user_id", None)
+    record["time"] = _now().strftime("%Y-%m-%d %H:%M:%S")
     data.setdefault("quiz_history", []).insert(0, record)
     # 只保留最近200条
     data["quiz_history"] = data["quiz_history"][:200]
-    save_user_data(data)
+    save_user_data(data, uid)
     return jsonify({"message": "已记录"})
 
 
@@ -2200,31 +2535,34 @@ def add_quiz_history():
 @app.route("/api/favorites")
 def get_favorites():
     """获取收藏列表"""
-    data = load_user_data()
+    data = load_user_data(_request_uid())
     return jsonify(data.get("favorites", []))
 
 
 @app.route("/api/favorites", methods=["POST"])
 def add_favorite():
     """收藏文章"""
-    data = load_user_data()
+    uid = _request_uid()
+    data = load_user_data(uid)
     item = request.json
+    item.pop("user_id", None)
     # 去重
     existing = [f["filename"] for f in data.get("favorites", [])]
     if item.get("filename") in existing:
         return jsonify({"message": "已收藏过"})
-    item["time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    item["time"] = _now().strftime("%Y-%m-%d %H:%M:%S")
     data.setdefault("favorites", []).insert(0, item)
-    save_user_data(data)
+    save_user_data(data, uid)
     return jsonify({"message": "收藏成功"})
 
 
 @app.route("/api/favorites/<path:filename>", methods=["DELETE"])
 def remove_favorite(filename):
     """取消收藏"""
-    data = load_user_data()
+    uid = _request_uid()
+    data = load_user_data(uid)
     data["favorites"] = [f for f in data.get("favorites", []) if f.get("filename") != filename]
-    save_user_data(data)
+    save_user_data(data, uid)
     return jsonify({"message": "已取消收藏"})
 
 
@@ -2232,7 +2570,7 @@ def remove_favorite(filename):
 @app.route("/api/stats")
 def get_stats():
     """获取学习统计"""
-    data = load_user_data()
+    data = load_user_data(_request_uid())
     history = data.get("quiz_history", [])
     wrong = data.get("wrong_questions", [])
 
@@ -2253,7 +2591,7 @@ def get_stats():
 
     # 取最近7天
     from datetime import timedelta
-    today = datetime.now().date()
+    today = _now().date()
     week_data = []
     for i in range(6, -1, -1):
         d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -2276,7 +2614,7 @@ def get_daily_quiz():
     """从最新日报中提取今日随堂测验，返回结构化题目数据"""
     from datetime import timedelta
     for offset in range(3):
-        d = (datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d")
+        d = (_now() - timedelta(days=offset)).strftime("%Y-%m-%d")
         filepath = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{d}.md")
         if os.path.exists(filepath):
             with open(filepath, "r", encoding="utf-8") as f:
@@ -2317,6 +2655,8 @@ def get_daily_quiz():
 
             if questions:
                 return jsonify({"date": d, "questions": questions})
+            # 解析失败时降级:返回原文供前端展示,而不是静默空结果
+            return jsonify({"date": d, "questions": [], "raw": quiz_text[:800], "note": "今日测验格式无法解析，已返回原文"})
     return jsonify({"date": "", "questions": []})
 
 
@@ -2343,39 +2683,6 @@ def query_explain():
 
 
 # ========== 申论训练模块 ==========
-
-def _search_news_kb_for_essay(text: str, top_k: int = 5) -> str:
-    """从知识库检索与文本相关的素材（向量召回 + rerank精排）"""
-    client = get_chroma_client()
-    try:
-        collection = client.get_collection("shizheng_news")
-    except Exception:
-        return ""
-
-    # 提取关键句作为查询
-    query_text = text[:200] if len(text) > 200 else text
-    embeddings = get_embedding([query_text])
-    if not embeddings:
-        return ""
-
-    # 向量召回更多候选再精排，提升素材相关性
-    recall_n = max(top_k * 4, 20)
-    results = collection.query(query_embeddings=embeddings, n_results=recall_n)
-    docs = results["documents"][0]
-    if not docs:
-        return ""
-
-    reranked = rerank_documents(query_text, docs, top_n=top_k)
-    if reranked:
-        ordered = [docs[r["index"]] for r in reranked]
-    else:
-        ordered = docs[:top_k]
-
-    materials = []
-    for i, doc in enumerate(ordered):
-        materials.append(f"【素材{i+1}】{doc[:300]}")
-    return "\n\n".join(materials)
-
 
 def _search_kb_for_essay(text: str, top_k: int = 5, use_rerank: bool = True) -> str:
     """Search essay materials first, then fall back to the original news collection."""
@@ -2429,7 +2736,7 @@ def _search_kb_for_essay(text: str, top_k: int = 5, use_rerank: bool = True) -> 
         else:
             ordered = candidates[:top_k]
         for index, item in enumerate(ordered):
-            materials.append(f"【检索素材{index + 1}】{item['document'][:650]}")
+            materials.append(f"【检索素材{index + 1}】{item['document'][:500]}")
 
     parts = []
     if guidance:
@@ -2456,6 +2763,12 @@ def essay_review():
         return jsonify({"error": f"文章过长，最多支持{ESSAY_MAX_CHARS}字"}), 413
     if len(topic) > 500:
         return jsonify({"error": "申论题目不能超过500字"}), 413
+
+    # 批改结果缓存:完全相同输入在 TTL 内秒回
+    review_cache_key = _review_cache_key("review", essay, topic)
+    cached = _review_cache_get(review_cache_key)
+    if cached:
+        return jsonify(cached)
 
     # 从知识库检索相关素材
     kb_materials = _search_kb_for_essay(essay)
@@ -2498,11 +2811,13 @@ def essay_review():
 [基于知识库素材，推荐2-3个可以引用的时政案例/表述]"""
 
     system = "你是资深公考申论阅卷专家，有10年申论批改经验。请按照国考申论评分标准进行客观、专业的批改，指出不足的同时肯定优点。"
-    answer = call_deepseek(prompt, system)
+    answer = call_deepseek(prompt, system, timeout=240, max_tokens=8192, model=REVIEW_MODEL)
     if not answer or answer.lstrip().startswith("AI调用失败:"):
         return jsonify({"error": answer or "AI未返回批改结果"}), 502
     html = markdown.markdown(answer, extensions=["tables", "fenced_code"])
-    return jsonify({"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)})
+    result = {"answer": answer, "html": html, "has_kb_materials": bool(kb_materials)}
+    _review_cache_set(review_cache_key, result)
+    return jsonify(result)
 
 
 @app.route("/api/essay/assist", methods=["POST"])
@@ -2620,7 +2935,7 @@ def essay_extract_topic():
         return jsonify({"error": "仅支持 PDF、Word(.docx) 或文本文件"}), 400
 
     safe = fname.replace("/", "_").replace("\\", "_")
-    filepath = os.path.join(PDF_UPLOADS_DIR, f"essay_topic_{datetime.now().strftime('%Y%m%d%H%M%S')}_{safe}")
+    filepath = os.path.join(ESSAY_TEMP_DIR, f"essay_topic_{_now().strftime('%Y%m%d%H%M%S')}_{safe}")
     file.save(filepath)
 
     try:
@@ -2696,8 +3011,8 @@ def essay_paper_upload():
 
     safe_name = secure_filename(fname) or "essay_paper"
     filepath = os.path.join(
-        PDF_UPLOADS_DIR,
-        f"essay_local_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+        ESSAY_TEMP_DIR,
+        f"essay_local_{_now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
     )
     file.save(filepath)
     try:
@@ -2728,6 +3043,133 @@ def essay_paper_upload():
     })
 
 
+def _full_review_prepare(paper_text: str, topic: str):
+    """阶段一:先审题,输出每题评分要点 JSON(不含作答)。
+    结果按(试卷, 题目)缓存:同一试卷不同作答共用审题结果。失败返回 None(调用方降级为单阶段)。"""
+    cache_key = _review_cache_key("prepare", paper_text, topic)
+    cached = _review_cache_get(cache_key)
+    if cached:
+        return cached
+    prompt = f"""请先审题,不要批改作答。根据以下申论试卷,识别包含的每道题并给出评分要点。
+
+【试卷材料与题目】
+{paper_text[:25000]}
+
+【申论题目(可选)】
+{topic or '未提供'}
+
+请严格输出合法 JSON(不要 Markdown 代码块、不要额外解释):
+{{
+  "questions": [
+    {{
+      "id": "1",
+      "type": "概括归纳/综合分析/提出对策/应用文/大作文/其他",
+      "task": "题目要求简述",
+      "max_score": 分值(未给出则填 0),
+      "key_points": [
+        {{"point": "材料要点", "evidence": "材料依据(原文或段落位置)"}}
+      ]
+    }}
+  ]
+}}"""
+    system = "你是严谨的申论命题解析专家,只负责从材料中提炼评分要点,不得虚构材料内容。只输出合法JSON。"
+    raw = call_deepseek(prompt, system, timeout=240, max_tokens=8192, model=PREPARE_MODEL)
+    parsed = _parse_json_loose(raw)
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("questions"), list):
+        print("[FULL-REVIEW] 审题失败,降级为单阶段批改")
+        return None
+    _review_cache_set(cache_key, parsed, ttl=_PREPARE_CACHE_TTL)
+    return parsed
+
+
+def _load_essay_anchor(max_chars: int = 1400) -> str:
+    """读取批改案例作为评分松紧度参照(锚定)。"""
+    files = sorted(glob.glob(os.path.join(ESSAY_VAULT_DIR, "批改案例", "*.md")))
+    if not files:
+        return ""
+    try:
+        with open(files[0], "r", encoding="utf-8") as f:
+            return f.read()[:max_chars]
+    except OSError:
+        return ""
+
+
+_TYPE_STANDARDS = {
+    "概括归纳": "小题-概括归纳.md",
+    "综合分析": "小题-综合分析.md",
+    "提出对策": "小题-提出对策.md",
+    "应用文": "小题-应用文.md",
+    "大作文": "大作文.md",
+}
+
+
+def _load_standard_for_type(qtype: str, max_chars: int = 1200) -> str:
+    """按题型加载对应评分标准文件。"""
+    fname = _TYPE_STANDARDS.get(qtype)
+    if not fname:
+        return ""
+    path = os.path.join(ESSAY_VAULT_DIR, "评分标准", fname)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()[:max_chars]
+    except OSError:
+        return ""
+
+
+def _load_problem_labels(max_chars: int = 1400) -> str:
+    """加载问题标签索引,供批改输出按体系归类。"""
+    path = os.path.join(ESSAY_VAULT_DIR, "问题标签", "问题标签索引.md")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()[:max_chars]
+    except OSError:
+        return ""
+
+
+def _validate_full_review_report(report: dict) -> list:
+    """评分自洽性校验:总分≈分项和、分数不超满分、要点状态合法。返回 warnings 列表。"""
+    warnings = []
+    if not isinstance(report, dict):
+        return warnings
+    overview = report.get("overview") or {}
+    questions = report.get("questions") or []
+    total = overview.get("total_score")
+    try:
+        total_f = float(total)
+    except (TypeError, ValueError):
+        total_f = None
+    if total_f is not None and isinstance(questions, list) and questions:
+        scored = []
+        consistent = True
+        for q in questions:
+            try:
+                scored.append(float(q.get("score")))
+            except (TypeError, ValueError):
+                consistent = False
+                break
+        if consistent:
+            sum_f = round(sum(scored), 1)
+            if abs(sum_f - total_f) > 15:
+                warnings.append(f"总分({total_f})与分项之和({sum_f})偏差较大,建议复核")
+    for q in questions if isinstance(questions, list) else []:
+        if not isinstance(q, dict):
+            continue
+        qid = q.get("id") or "?"
+        try:
+            max_score = float(q.get("max_score"))
+            score = float(q.get("score"))
+            if max_score > 0 and score > max_score + 0.5:
+                warnings.append(f"第{qid}题得分({score})超过满分({max_score})")
+        except (TypeError, ValueError):
+            pass
+        for kp in q.get("key_points") or []:
+            if isinstance(kp, dict):
+                status = str(kp.get("status", ""))
+                if status and status not in {"命中", "部分命中", "未命中", "材料外", "未结构化"}:
+                    warnings.append(f"第{qid}题要点状态不合法: {status}")
+    return warnings
+
+
 @app.route("/api/essay/full-review", methods=["POST"])
 def essay_full_review():
     """Review a complete essay paper: material, prompts and candidate answers."""
@@ -2749,8 +3191,8 @@ def essay_full_review():
             return jsonify({"error": "上传文件不能超过25MB"}), 413
         safe_name = secure_filename(original_name) or "essay_paper"
         temporary_path = os.path.join(
-            PDF_UPLOADS_DIR,
-            f"essay_full_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+            ESSAY_TEMP_DIR,
+            f"essay_full_{_now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
         )
         uploaded.save(temporary_path)
         try:
@@ -2801,6 +3243,12 @@ def essay_full_review():
         return jsonify({"error": "请上传或粘贴申论材料与题目"}), 400
     has_answers = bool(answers)
 
+    # 批改结果缓存:完全相同输入在 TTL 内秒回
+    full_cache_key = _review_cache_key("full", paper_text, answers, topic, reference_text)
+    cached = _review_cache_get(full_cache_key)
+    if cached:
+        return jsonify(cached)
+
     # Keep a complete enough context for ordinary national/provincial exam papers,
     # while avoiding an unbounded request from a scanned or duplicated document.
     paper_limit = 30000
@@ -2810,10 +3258,36 @@ def essay_full_review():
     paper_for_prompt = paper_text[:paper_limit]
     answers_for_prompt = answers[:answer_limit] if has_answers else "未提供考生作答，请只生成参考要点和参考答案。"
     retrieval_text = "\n".join([topic, paper_for_prompt[:1200], answers_for_prompt[:800]]).strip()
-    kb_materials = _search_kb_for_essay(retrieval_text, top_k=8, use_rerank=True)
+    kb_materials = _search_kb_for_essay(retrieval_text, top_k=5, use_rerank=True)
     reference_line = reference_text[:18000] if reference_text else "未提供官方参考答案或分值。"
 
-    prompt = f"""请批改一整套申论试卷，必须同时依据【试卷材料与题目】、【考生作答】和【申论知识库规则】完成逐题评分与修改。
+    # 阶段一:先审题提炼评分要点(同一试卷不同作答可缓存复用)
+    prepare = _full_review_prepare(paper_for_prompt, topic)
+    guidance_blocks = []
+    if prepare:
+        prepare_json = json.dumps(prepare, ensure_ascii=False)
+        guidance_blocks.append(f"【阶段一审题要点(必须逐题核对,不得遗漏要点;与材料冲突时以材料为准)】\n{prepare_json[:6000]}")
+        standards = []
+        for q in prepare.get("questions") or []:
+            if not isinstance(q, dict):
+                continue
+            qtype = q.get("type", "")
+            std = _load_standard_for_type(qtype)
+            if std:
+                standards.append(f"【第{q.get('id', '?')}题({qtype})评分标准】\n{std}")
+        if standards:
+            guidance_blocks.append("\n\n".join(standards))
+    anchor = _load_essay_anchor()
+    if anchor:
+        guidance_blocks.append(f"【评分参照案例(用于校准评分松紧度,参照其严格程度)】\n{anchor}")
+    labels = _load_problem_labels()
+    if labels:
+        guidance_blocks.append(f"【问题标签体系(problem_labels 必须从中取值)】\n{labels}")
+    guidance_text = "\n\n".join(guidance_blocks)
+
+    prompt = f"""请批改一整套申论试卷，必须同时依据【试卷材料与题目】、【考生作答】、【阶段一审题要点/评分标准】和【申论知识库规则】完成逐题评分与修改。
+
+{guidance_text}
 
 【试卷材料与题目】
 {paper_for_prompt}
@@ -2828,6 +3302,7 @@ def essay_full_review():
 {kb_materials or '未检索到额外内容，请依据通用申论评分原则，并明确说明依据不足。'}
 
 请完成以下任务：
+0. 严格依据【阶段一审题要点】逐题核对评分要点,不得遗漏;按【评分标准】对应题型执行评分维度;评分松紧度参照【评分参照案例】。
 1. 识别整套试卷包含的题目，判断每题题型（概括归纳、综合分析、提出对策、应用文、大作文或其他）。
 2. 逐题从材料中提炼评分要点。{('如果已提供考生作答，逐项判断答案是“命中”“部分命中”“未命中”或“材料外”；如果未提供作答，则不要虚构考生表现。') if has_answers else '当前未提供考生作答，只输出参考要点、参考答案和评分点。'}
 3. 优先使用官方参考答案和分值评分；没有官方评分细则时，必须标明“估算分”，不能伪装成官方分数。未提供考生作答时，得分字段填 null，并说明“待提交作答后评分”。
@@ -2857,12 +3332,13 @@ def essay_full_review():
       "answer_evaluation": "",
       "problems": [],
       "modification": "",
-      "suggested_answer": ""
+      "suggested_answer": "",
+      "problem_labels": ["从问题标签体系中取值,如 内容/要点遗漏;没有则空数组"]
     }}
   ]
 }}"""
     system = "你是严谨的国考、省考申论阅卷教师。必须先建立材料证据链，再评分和修改；不能把常识或知识库素材冒充题目材料要点。只输出合法JSON。"
-    answer = call_deepseek(prompt, system)
+    answer = call_deepseek(prompt, system, timeout=240, max_tokens=8192, model=REVIEW_MODEL)
     if not answer or answer.lstrip().startswith("AI调用失败:"):
         return jsonify({"error": answer or "AI未返回批改结果"}), 502
 
@@ -2879,6 +3355,7 @@ def essay_full_review():
                 "priority_fixes": [],
             },
             "questions": [],
+            "_validation": {"warnings": []},
             "raw_answer": answer,
         }
         rendered = answer
@@ -2888,6 +3365,7 @@ def essay_full_review():
         if not isinstance(report.get("questions"), list):
             report["questions"] = []
         report["_has_answers"] = has_answers
+        report["_validation"] = {"warnings": _validate_full_review_report(report)}
         rendered = _full_review_markdown(report)
 
     if paper_truncated or answer_truncated:
@@ -2896,7 +3374,7 @@ def essay_full_review():
         rendered = f"> [!warning] {note}\n\n{rendered}"
 
     html = markdown.markdown(rendered, extensions=["tables", "fenced_code"])
-    return jsonify({
+    response = jsonify({
         "answer": rendered,
         "html": html,
         "report": report,
@@ -2908,6 +3386,8 @@ def essay_full_review():
         "answer_chars": len(answers),
         "source": source,
     })
+    _review_cache_set(full_cache_key, response.get_json())
+    return response
 
 
 @app.route("/api/essay/export", methods=["POST"])
@@ -3053,19 +3533,43 @@ def _extract_essay_text(answer: str) -> str:
     return re.split(r"\n##\s+", extracted, maxsplit=1)[0].strip()
 
 
+def _image_mime(image_path: str) -> str:
+    """根据扩展名返回图片 MIME 类型。"""
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext == ".png":
+        return "image/png"
+    if ext == ".webp":
+        return "image/webp"
+    return "image/jpeg"
+
+
+def _encode_image(image_path: str) -> str:
+    """读取图片并 base64 编码。"""
+    import base64
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def _vision_payload(mime: str, b64: str, prompt: str, system_prompt: str, temperature: float, max_tokens: int) -> dict:
+    """构造视觉模型请求 payload。"""
+    return {
+        "model": VISION_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ]},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+
 def _call_vision_essay_ocr(image_path: str, page_number: int = 1) -> dict:
     """OCR one answer image without asking the model to grade or rewrite it."""
-    import base64
-
-    ext = os.path.splitext(image_path)[1].lower()
-    mime = "image/jpeg"
-    if ext == ".png":
-        mime = "image/png"
-    elif ext == ".webp":
-        mime = "image/webp"
-
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
+    mime = _image_mime(image_path)
+    b64 = _encode_image(image_path)
 
     prompt = f"""请准确识别这张申论考生作答图片中的中文文字，这是第{page_number}页答案。
 
@@ -3081,18 +3585,7 @@ def _call_vision_essay_ocr(image_path: str, page_number: int = 1) -> dict:
         "Authorization": f"Bearer {VISION_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [
-            {"role": "system", "content": "你是中文申论答题图片 OCR 助手，只负责准确识别图片文字。"},
-            {"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-            ]},
-        ],
-        "temperature": 0.1,
-        "max_tokens": max(VISION_MAX_TOKENS, 2400),
-    }
+    payload = _vision_payload(mime, b64, prompt, "你是中文申论答题图片 OCR 助手，只负责准确识别图片文字。", 0.1, max(VISION_MAX_TOKENS, 2400))
     resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
     if resp.status_code >= 400:
         body = resp.text[:500] if resp.text else ""
@@ -3122,7 +3615,7 @@ def essay_ocr_image():
     safe_name = secure_filename(fname) or "answer.jpg"
     filepath = os.path.join(
         IMAGE_UPLOADS_DIR,
-        f"essay_ocr_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+        f"essay_ocr_{_now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
     )
     file.save(filepath)
     try:
@@ -3140,16 +3633,8 @@ def essay_ocr_image():
 
 def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "review") -> dict:
     """Run fast one-pass review or deep OCR-plus-review for an essay image."""
-    import base64
-    ext = os.path.splitext(image_path)[1].lower()
-    mime = "image/jpeg"
-    if ext == ".png":
-        mime = "image/png"
-    elif ext == ".webp":
-        mime = "image/webp"
-
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
+    mime = _image_mime(image_path)
+    b64 = _encode_image(image_path)
 
     deep_mode = mode == "deep"
     topic_line = f"\n申论题目：{topic}" if topic else ""
@@ -3205,24 +3690,7 @@ def _call_vision_essay_review(image_path: str, topic: str = "", mode: str = "rev
         "Authorization": f"Bearer {VISION_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-                ]
-            }
-        ],
-        "temperature": 0.2,
-        "max_tokens": VISION_MAX_TOKENS
-    }
+    payload = _vision_payload(mime, b64, prompt, system_prompt, 0.2, VISION_MAX_TOKENS)
 
     resp = requests.post(VISION_API_URL, headers=headers, json=payload, timeout=120)
     if resp.status_code >= 400:
@@ -3300,7 +3768,7 @@ def essay_image_review():
     topic = request.form.get("topic", "").strip()
     mode = request.form.get("mode", "review").strip() or "review"
     safe = secure_filename(fname) or "essay.jpg"
-    filename = f"essay_img_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe}"
+    filename = f"essay_img_{_now().strftime('%Y%m%d%H%M%S%f')}_{safe}"
     filepath = os.path.join(IMAGE_UPLOADS_DIR, filename)
     try:
         file.save(filepath)
@@ -3321,173 +3789,25 @@ CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()
 @app.route("/api/cron/daily-crawl", methods=["POST", "GET"])
 def cron_daily_crawl():
     """定时爬取新闻，供外部cron服务调用"""
-    # Header is preferred; the query parameter remains for existing schedulers.
-    provided_secret = (
-        request.headers.get("X-Cron-Secret", "").strip()
-        or request.args.get("secret", "").strip()
-    )
-    if not CRON_SECRET:
-        return jsonify({"error": "cron service is not configured"}), 503
-    if not provided_secret or not secrets.compare_digest(provided_secret, CRON_SECRET):
-        return jsonify({"error": "unauthorized"}), 401
-
-    import threading
-
-    def do_crawl():
-        today = datetime.now().strftime("%Y-%m-%d")
-        print(f"[CRON] 开始每日爬取 {today}")
-
-        # 1. 爬取新闻（共享管线，多源）
-        sorted_news = fetch_news_from_sources("CRON")
-        if not sorted_news:
-            print("[CRON] 未获取到新闻")
-            return
-        sorted_news = sorted_news[:15]
-
-        # 2. 保存新闻全文（AI分析）
-        saved_files = []
-        for i, (title, info) in enumerate(sorted_news[:8]):
-            safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:40]
-            filename = f"{today}_{i+1:02d}_{safe_title}.md"
-            filepath = os.path.join(NEWS_ARCHIVE_DIR, filename)
-            if os.path.exists(filepath):
-                continue
-            # AI生成分析
-            prompt = f"请根据以下新闻标题，生成一份完整的时政新闻扩展分析（300-500字）：\n\n新闻标题：{title}\n\n请按以下格式输出：\n\n## 📌 新闻背景\n[2-3句背景介绍]\n\n## 📖 核心内容\n[新闻的具体内容扩展]\n\n## 🎯 考公考点\n- 申论角度：[可用主题]\n- 行测考点：[可能出题方向]\n\n## 💡 规范表述\n[2-3句官方标准表述]"
-            analysis = call_deepseek(prompt, "你是公考时政分析专家")
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(f"# {title}\n\n")
-                f.write(f"**日期**：{today}\n")
-                f.write(f"**来源**：{info['source']}\n")
-                if info['url']:
-                    f.write(f"**原文链接**：{info['url']}\n")
-                f.write("\n---\n\n")
-                f.write(analysis)
-            saved_files.append(filepath)
-            print(f"[CRON] 已保存: {filename}")
-
-        # 3. 生成日报
-        formatted = "\n".join([f"{i+1}. 【{info['source']}】{title}" for i, (title, info) in enumerate(sorted_news)])
-        report_prompt = f"""请分析以下时政新闻，按指定格式输出。
-
-【今日新闻】
-{formatted}
-
-请按以下格式输出：
-
-📌 **今日时政核心要点**（3-5条）
-- [新闻事件]：一句话概括+考公切入点
-
-📝 **一句话考点总结**
-1. 【来源】标题 → 考点方向：[具体考点]
-
-🔑 **高频关键词**
-关键词1 · 关键词2 · 关键词3
-
-📖 **申论素材卡**
-- 可用主题：[主题]
-- 核心案例：[新闻事件]
-- 规范表述：「官方表述」
-
-🎯 **行测时政预测**
-- 可能出题方向：[方向]
-
-💪 **【今日随堂测验】**
-
-请生成2道与今日时政相关的单选题：
-
-**题目1**
-[问题]
-A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
-答案：[_]
-
-**题目2**
-[问题]
-A. [选项1]  B. [选项2]  C. [选项3]  D. [选项4]
-答案：[_]
-"""
-        report = call_deepseek(report_prompt, "你是一个公考时政分析专家。请严格按照要求的格式输出分析结果。")
-        report_path = os.path.join(DAILY_REPORTS_DIR, f"daily_news_{today}.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(f"# 📰 {today} 时政日报\n\n")
-            f.write(report)
-        print(f"[CRON] 日报已生成: {report_path}")
-
-        # 4. 嵌入知识库
-        if saved_files:
-            try:
-                client = get_chroma_client()
-                collection = client.get_or_create_collection(
-                    name="shizheng_news",
-                    metadata={"description": "考公时政新闻知识库"}
-                )
-                for filepath in saved_files:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    chunks = chunk_text(content)
-                    if not chunks:
-                        continue
-                    fname = os.path.basename(filepath).replace(".md", "")
-                    date_match = re.match(r'(\d{4}-\d{2}-\d{2})', fname)
-                    for j, chunk in enumerate(chunks):
-                        try:
-                            emb = get_embedding([chunk])
-                            if emb:
-                                meta = {
-                                    "title": fname,
-                                    "date": date_match.group(1) if date_match else today,
-                                    "source": "新闻归档"
-                                }
-                                collection.add(
-                                    documents=[chunk],
-                                    embeddings=emb,
-                                    ids=[f"{fname}_chunk_{j}"],
-                                    metadatas=[meta]
-                                )
-                        except Exception as e:
-                            print(f"[CRON] 嵌入chunk失败: {e}")
-                print(f"[CRON] 知识库已更新，新增{len(saved_files)}篇")
-            except Exception as e:
-                print(f"[CRON] 知识库嵌入失败: {e}")
-
-        # 5. 生成晨读卡 + Bark推送到手机
-        try:
-            card = build_morning_card("CRON")
-            if card:
-                send_bark(f"☀️ 时政晨读 {today}", card.get("bark_body", ""), "时政晨读")
-                print(f"[CRON] 晨读卡已推送")
-            else:
-                # 兜底：晨读卡失败时仍推日报摘要
-                send_bark(f"📰 时政日报 {today}", report[:3500], "时政日报")
-        except Exception as e:
-            print(f"[CRON] 晨读卡/推送失败: {e}")
-
-        # 5.5 生成时政热点专题素材包
-        try:
-            build_topic_digest("CRON")
-        except Exception as e:
-            print(f"[CRON] 专题聚合失败: {e}")
-
-        # 6. 自动同步到GitHub（数据持久化）
-        try:
-            git_sync_to_github(f"auto: 每日爬取 {today}")
-        except Exception as e:
-            print(f"[CRON] GitHub同步失败: {e}")
-
-        print(f"[CRON] 每日爬取完成")
-
+    denied = _check_cron_secret()
+    if denied:
+        return denied
     # 异步执行，避免超时
-    thread = threading.Thread(target=do_crawl)
+    thread = threading.Thread(
+        target=run_crawl_pipeline,
+        kwargs={"log_prefix": "CRON", "push_morning_card": True},
+        daemon=True,
+    )
     thread.start()
-    return jsonify({"message": "爬取任务已启动", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    return jsonify({"message": "爬取任务已启动", "time": _now().strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/rebuild-kb", methods=["POST", "GET"])
 def rebuild_knowledge_base():
     """重建知识库：将所有已有新闻归档重新嵌入向量库"""
-    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
-    if secret != CRON_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
+    denied = _check_cron_secret()
+    if denied:
+        return denied
 
     result = _rebuild_kb_from_archives()
     if not result.get("success"):
@@ -3512,8 +3832,13 @@ def _rebuild_kb_from_archives() -> dict:
             pass
         collection = client.get_or_create_collection(
             name="shizheng_news",
-            metadata={"description": "考公时政新闻知识库"}
+            metadata={"description": "考公时政新闻知识库", "hnsw:space": "cosine"}
         )
+        # 集合已重建,旧的 PDF 已导入索引一并失效,避免误判重复导入
+        try:
+            os.remove(PDF_IMPORTED_INDEX_FILE)
+        except OSError:
+            pass
 
         # 1. 先收集所有文本块及元数据
         all_chunks, all_ids, all_metas = [], [], []
@@ -3573,9 +3898,9 @@ def _rebuild_kb_from_archives() -> dict:
 @app.route("/api/rebuild-essay-kb", methods=["POST", "GET"])
 def rebuild_essay_knowledge_base():
     """Rebuild the essay-specific vector collection from source and Obsidian notes."""
-    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
-    if secret != CRON_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
+    denied = _check_cron_secret()
+    if denied:
+        return denied
     result = _rebuild_essay_materials()
     return jsonify(result), (200 if result.get("success") else 500)
 
@@ -3597,9 +3922,9 @@ def debug_embedding():
 @app.route("/api/sync-github", methods=["POST", "GET"])
 def manual_sync_github():
     """手动触发数据同步到GitHub"""
-    secret = request.args.get("secret", "") or request.headers.get("X-Cron-Secret", "")
-    if secret != CRON_SECRET:
-        return jsonify({"error": "unauthorized"}), 401
+    denied = _check_cron_secret()
+    if denied:
+        return denied
     try:
         success = git_sync_to_github("auto: 手动触发同步")
         if success:
@@ -3614,8 +3939,30 @@ def manual_sync_github():
 
 def _startup_kb_autocheck():
     """启动自检：向量库为空且有归档时，自动后台重建。
-    Render等免费平台重新部署会清空文件系统，导致向量库丢失，此处自动恢复。"""
+    Render等免费平台重新部署会清空文件系统，导致向量库丢失，此处自动恢复。
+    用锁文件避免 gunicorn 多 worker 并发重建互相打架。"""
     def _run():
+        lock_path = os.path.join(DATA_DIR, ".kb_rebuild.lock")
+        for attempt in range(2):
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                break
+            except FileExistsError:
+                # 锁可能因进程崩溃/被杀而残留:超过 10 分钟视为过期,接管重建
+                try:
+                    stale = time.time() - os.path.getmtime(lock_path) > 600
+                except OSError:
+                    stale = False
+                if stale and attempt == 0:
+                    try:
+                        os.remove(lock_path)
+                    except OSError:
+                        pass
+                    print("[STARTUP] 检测到过期重建锁,已接管")
+                    continue
+                print("[STARTUP] 已有进程在重建知识库,跳过")
+                return
         try:
             client = get_chroma_client()
             try:
@@ -3637,8 +3984,12 @@ def _startup_kb_autocheck():
                 print(f"[STARTUP] 知识库自动重建失败: {result.get('error')}")
         except Exception as e:
             print(f"[STARTUP] 知识库自检异常: {e}")
+        finally:
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
-    import threading
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -3652,5 +4003,5 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5678))
     print(f"  访问地址: http://localhost:{port}")
     print("=" * 50)
-    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "1") == "1")
+    app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
 

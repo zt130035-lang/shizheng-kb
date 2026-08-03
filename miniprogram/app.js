@@ -1,10 +1,8 @@
 App({
   onLaunch() {
-    const defaultUrl = 'https://shizheng-kb.onrender.com'
-    const saved = String(wx.getStorageSync('BASE_URL') || '')
-    // 正式版默认使用线上 HTTPS；如果之前缓存的是本地调试地址，则自动切到线上。
-    if (!saved || saved.includes('127.0.0.1') || saved.includes('localhost') || saved.includes('10.100.72.76')) {
-      wx.setStorageSync('BASE_URL', defaultUrl)
+    // 仅首次启动写入默认线上地址;用户手动设置的 BASE_URL(本地调试等)不再被覆盖
+    if (!wx.getStorageSync('BASE_URL')) {
+      wx.setStorageSync('BASE_URL', 'https://shizheng-kb.onrender.com')
     }
   },
   onError(err) {

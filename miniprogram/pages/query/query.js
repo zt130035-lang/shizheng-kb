@@ -1,6 +1,7 @@
 const api = require('../../utils/api')
 
 const RECORD_KEY = 'ESSAY_REVIEW_RECORDS'
+const MAX_RECORD_ANSWER_CHARS = 10000
 
 function safeHtml(html) {
   if (!html) return '<p>暂无内容</p>'
@@ -20,10 +21,10 @@ function normalizeReviewReport(report) {
   if (!report || typeof report !== 'object') return null
   const questions = Array.isArray(report.questions) ? report.questions.map((question, index) => {
     const item = question && typeof question === 'object' ? question : {}
-    const points = Array.isArray(item.key_points) ? item.key_points.map((point) => {
-      if (typeof point === 'string') return { point, status: '未结构化', statusClass: 'status-unknown' }
+    const points = Array.isArray(item.key_points) ? item.key_points.map((point, index) => {
+      if (typeof point === 'string') return { point, key: `kp${index}`, status: '未结构化', statusClass: 'status-unknown' }
       const value = point && typeof point === 'object' ? point : {}
-      return { ...value, statusClass: statusClass(value.status) }
+      return { ...value, key: `kp${index}`, statusClass: statusClass(value.status) }
     }) : []
     const problems = Array.isArray(item.problems)
       ? item.problems
@@ -32,6 +33,21 @@ function normalizeReviewReport(report) {
     return { ...item, displayId: item.id || index + 1, displayScore: hasScore ? item.score : '待评', key_points: points, problems }
   }) : []
   return { ...report, questions }
+}
+
+// 检查图片分辨率:合并多次 wx.getImageInfo 调用,全部检查但只提示一次
+function warnSmallImages(files) {
+  const paths = (files || []).map(file => file.path || file.tempFilePath || '').filter(Boolean)
+  let warned = false
+  paths.forEach(path => wx.getImageInfo({
+    src: path,
+    success: info => {
+      if (!warned && (info.width < 800 || info.height < 800)) {
+        warned = true
+        wx.showToast({ title: '部分图片较小，识别可能不准', icon: 'none' })
+      }
+    }
+  }))
 }
 
 function userMessage(err) {
@@ -57,7 +73,7 @@ function saveRecord(topic, answer) {
     topic: topic || '未填写题目',
     time: formatTime(new Date()),
     summary: text.replace(/<[^>]+>/g, '').slice(0, 80),
-    answer: text
+    answer: text.slice(0, MAX_RECORD_ANSWER_CHARS)
   }].concat(Array.isArray(records) ? records : []).slice(0, 20)
   wx.setStorageSync(RECORD_KEY, next)
 }
@@ -90,6 +106,39 @@ Page({
     reviewMode: 'fast'
   },
 
+  onLoad() {
+    this.restoreDraft()
+  },
+
+  restoreDraft() {
+    const draft = wx.getStorageSync('ESSAY_REVIEW_DRAFT')
+    if (!draft || typeof draft !== 'object') return
+    const next = {}
+    if (draft.paperTitle) next.paperTitle = draft.paperTitle
+    if (draft.paperText) next.paperText = draft.paperText
+    if (draft.answerText) next.answerText = draft.answerText
+    if (draft.referenceText) next.referenceText = draft.referenceText
+    if (draft.essayTopic) next.essayTopic = draft.essayTopic
+    if (Object.keys(next).length) this.setData(next)
+  },
+
+  scheduleDraftSave() {
+    if (this._draftTimer) clearTimeout(this._draftTimer)
+    this._draftTimer = setTimeout(() => {
+      wx.setStorageSync('ESSAY_REVIEW_DRAFT', {
+        paperTitle: this.data.paperTitle,
+        paperText: this.data.paperText,
+        answerText: this.data.answerText,
+        referenceText: this.data.referenceText,
+        essayTopic: this.data.essayTopic
+      })
+    }, 400)
+  },
+
+  onUnload() {
+    if (this._draftTimer) clearTimeout(this._draftTimer)
+  },
+
   onShow() {
     const result = wx.getStorageSync('PAPER_UPLOAD_RESULT')
     if (!result) return
@@ -116,14 +165,16 @@ Page({
   setReviewKind(e) {
     if (this.data.reviewing) return
     const kind = e.currentTarget.dataset.kind === 'image' ? 'image' : 'full'
-    this.setData({ reviewKind: kind })
+    // 切到图片批改时清空整套批改留下的答案,避免模式间串结果
+    const clear = kind === 'image' ? { essayAnswer: '', essayAnswerHtml: '', essayExtractedText: '' } : {}
+    this.setData({ reviewKind: kind, ...clear })
   },
 
-  onPaperTitleInput(e) { this.setData({ paperTitle: e.detail.value }) },
-  onPaperTextInput(e) { this.setData({ paperText: e.detail.value }) },
-  onAnswerInput(e) { this.setData({ answerText: e.detail.value }) },
-  onReferenceTextInput(e) { this.setData({ referenceText: e.detail.value, referenceFileToken: '' }) },
-  onTopicInput(e) { this.setData({ essayTopic: e.detail.value }) },
+  onPaperTitleInput(e) { this.setData({ paperTitle: e.detail.value }); this.scheduleDraftSave() },
+  onPaperTextInput(e) { this.setData({ paperText: e.detail.value }); this.scheduleDraftSave() },
+  onAnswerInput(e) { this.setData({ answerText: e.detail.value }); this.scheduleDraftSave() },
+  onReferenceTextInput(e) { this.setData({ referenceText: e.detail.value, referenceFileToken: '' }); this.scheduleDraftSave() },
+  onTopicInput(e) { this.setData({ essayTopic: e.detail.value }); this.scheduleDraftSave() },
 
   chooseAnswerImages() {
     if (this.data.reviewing) return
@@ -145,12 +196,7 @@ Page({
             size: file.size || 0
           }))
         })
-        files.forEach(file => wx.getImageInfo({
-          src: file.tempFilePath,
-          success: info => {
-            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
-          }
-        }))
+        warnSmallImages(files)
       }
     })
   },
@@ -202,12 +248,7 @@ Page({
           paperFileName: '',
           materialImages: files.map(file => ({ path: file.tempFilePath, name: file.name || '材料图片', size: file.size || 0 }))
         })
-        files.forEach(file => wx.getImageInfo({
-          src: file.tempFilePath,
-          success: info => {
-            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
-          }
-        }))
+        warnSmallImages(files)
       }
     })
   },
@@ -278,7 +319,9 @@ Page({
         if (file.size && file.size > 25 * 1024 * 1024) return wx.showToast({ title: '文件超过25MB', icon: 'none' })
         wx.showLoading({ title: '读取参考答案', mask: true })
         try {
-          const result = await api.uploadPaperFile(file.path)
+          const result = await api.uploadPaperFile(file.path, (p) => {
+            wx.showLoading({ title: `上传中 ${p}%`, mask: true })
+          })
           if (result.error) return wx.showToast({ title: userMessage(result.error).slice(0, 28), icon: 'none' })
           this.setData({ referenceFileToken: result.paper_id || '', referenceFileName: file.name || '已选参考答案', referenceText: '' })
         } finally {
@@ -286,6 +329,32 @@ Page({
         }
       }
     })
+  },
+
+  // 多图 OCR 并行执行(并发上限 3),按原顺序汇总结果,任一失败立即抛错
+  async ocrImagesInParallel(items, label) {
+    const total = items.length
+    const results = new Array(total).fill('')
+    let done = 0
+    const worker = async (index) => {
+      const ocr = await api.ocrEssayImage(items[index].path, { page: String(index + 1) }, (p) => {
+        this.setData({ uploadProgressText: `正在上传${label} ${index + 1}/${total} ${p}%` })
+      })
+      if (ocr.error) throw new Error(`第${index + 1}张${label}：${userMessage(ocr.error)}`)
+      done += 1
+      this.setData({ uploadProgressText: `正在识别${label} ${done}/${total}` })
+      if (ocr.text) results[index] = ocr.text
+    }
+    let cursor = 0
+    const runners = Array.from({ length: Math.min(3, total) }, async () => {
+      while (cursor < total) {
+        const index = cursor
+        cursor += 1
+        await worker(index)
+      }
+    })
+    await Promise.all(runners)
+    return results
   },
 
   async submitFullReview() {
@@ -298,28 +367,14 @@ Page({
     try {
       let imageMaterial = ''
       if (this.data.materialImages.length) {
-        const materialParts = []
-        for (let index = 0; index < this.data.materialImages.length; index += 1) {
-          this.setData({ uploadProgressText: `正在识别材料图片 ${index + 1}/${this.data.materialImages.length}` })
-          const ocr = await api.ocrEssayImage(this.data.materialImages[index].path, { page: String(index + 1) })
-          if (ocr.error) throw new Error(`第${index + 1}张材料图片：${userMessage(ocr.error)}`)
-          if (ocr.text) materialParts.push(`第${index + 1}页材料：\n${ocr.text}`)
-        }
-        imageMaterial = materialParts.join('\n\n')
+        const materialParts = await this.ocrImagesInParallel(this.data.materialImages, '材料图片')
+        imageMaterial = materialParts.map((text, index) => text ? `第${index + 1}页材料：\n${text}` : '').filter(Boolean).join('\n\n')
       }
       let imageAnswer = ''
       if (this.data.answerImages.length) {
-        const ocrParts = []
-        for (let index = 0; index < this.data.answerImages.length; index += 1) {
-          const item = this.data.answerImages[index]
-          this.setData({ uploadProgressText: `正在识别答案图片 ${index + 1}/${this.data.answerImages.length}` })
-          const ocr = await api.ocrEssayImage(item.path, { page: String(index + 1) })
-          if (ocr.error) throw new Error(`第${index + 1}张答案图片：${userMessage(ocr.error)}`)
-          if (ocr.text) ocrParts.push(`第${index + 1}页答案：\n${ocr.text}`)
-        }
-        imageAnswer = ocrParts.join('\n\n')
+        const ocrParts = await this.ocrImagesInParallel(this.data.answerImages, '答案图片')
+        imageAnswer = ocrParts.map((text, index) => text ? `第${index + 1}页答案：\n${text}` : '').filter(Boolean).join('\n\n')
         if (!imageAnswer.trim()) throw new Error('答案图片未识别出文字，请换清晰图片重试')
-        this.setData({ uploadProgressText: '整套批改中' })
       }
       const payload = {
         topic: this.data.paperTitle.trim(),
@@ -330,7 +385,9 @@ Page({
         answers: [this.data.answerText.trim(), imageAnswer].filter(Boolean).join('\n\n')
       }
       const result = this.data.paperFilePath
-        ? await api.reviewEssaySet(this.data.paperFilePath, payload)
+        ? await api.reviewEssaySet(this.data.paperFilePath, payload, (p) => {
+            this.setData({ uploadProgressText: `上传试卷中 ${p}%` })
+          })
         : await api.reviewEssaySetText(payload)
       if (result.error) {
         wx.showToast({ title: userMessage(result.error).slice(0, 28), icon: 'none' })
@@ -388,12 +445,7 @@ Page({
           essayAnswer: '',
           essayAnswerHtml: ''
         })
-        files.forEach(file => wx.getImageInfo({
-          src: file.tempFilePath,
-          success: info => {
-            if (info.width < 800 || info.height < 800) wx.showToast({ title: '图片较小，识别可能不准', icon: 'none' })
-          }
-        }))
+        warnSmallImages(files)
       }
     })
   },
@@ -432,16 +484,12 @@ Page({
         data = await api.reviewEssayImage(images[0].path, {
           topic: this.data.essayTopic || '',
           mode: this.data.reviewMode
+        }, (p) => {
+          this.setData({ uploadProgressText: `上传中 ${p}%` })
         })
       } else {
-        const parts = []
-        for (let index = 0; index < images.length; index += 1) {
-          this.setData({ uploadProgressText: `正在识别作文图片 ${index + 1}/${images.length}` })
-          const ocr = await api.ocrEssayImage(images[index].path, { page: String(index + 1) })
-          if (ocr.error) throw new Error(`第${index + 1}张图片：${userMessage(ocr.error)}`)
-          if (ocr.text) parts.push(`第${index + 1}页作文：\n${ocr.text}`)
-        }
-        const essay = parts.join('\n\n')
+        const parts = await this.ocrImagesInParallel(images, '作文图片')
+        const essay = parts.map((text, index) => text ? `第${index + 1}页作文：\n${text}` : '').filter(Boolean).join('\n\n')
         if (essay.length < 50) throw new Error('多张图片未识别出足够文字，请上传更清晰的照片')
         this.setData({ essayExtractedText: essay })
         this.setData({ uploadProgressText: '整合多页并批改' })
@@ -464,6 +512,9 @@ Page({
 
   copyEssayAnswer() {
     if (!this.data.essayAnswer) return
+    if (this.data.essayAnswer.length > 800000) {
+      return wx.showModal({ title: '内容较长', content: '批改结果超过剪贴板上限，建议使用导出 Word/PDF', showCancel: false })
+    }
     wx.setClipboardData({
       data: this.data.essayAnswer,
       success() { wx.showToast({ title: '批改结果已复制', icon: 'success' }) }
@@ -479,7 +530,7 @@ Page({
       answer: this.data.essayAnswer,
       format
     }).then((buffer) => {
-      const filePath = `${wx.env.USER_DATA_PATH}/essay-review.${format}`
+      const filePath = `${wx.env.USER_DATA_PATH}/essay-review-${Date.now().toString(36)}.${format}`
       wx.getFileSystemManager().writeFile({
         filePath,
         data: buffer,

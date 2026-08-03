@@ -48,8 +48,8 @@ git push -u origin main
    - **Instance Type**: Free
 
 6. 点击 "Advanced" → "Add Environment Variable"，添加：
-   - `SILICONFLOW_API_KEY` = `sk-bapmemmmswmycyamlywctomymaievhzmlyznvenqosetlgxa`
-   - `DEEPSEEK_API_KEY` = `sk-97ca5455764543a8b57f63f3f9cacfef`
+   - `SILICONFLOW_API_KEY` = `<REDACTED_API_KEY>`
+   - `DEEPSEEK_API_KEY` = `<REDACTED_API_KEY>`
    - `FLASK_DEBUG` = `0`
 
 7. 点击 "Create Web Service"

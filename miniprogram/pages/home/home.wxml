@@ -5,22 +5,22 @@
   </view>
 
   <view class="section grid">
-    <view class="card feature-card">
+    <view class="card feature-card" bindtap="goFeature" data-target="review">
       <view class="feature-icon">📷</view>
       <view class="card-title">图片批改</view>
       <view class="card-meta">上传作文图。</view>
     </view>
-    <view class="card feature-card">
+    <view class="card feature-card" bindtap="goFeature" data-target="structure">
       <view class="feature-icon">🧩</view>
-      <view class="card-title">结构优化</view>
+      <view class="card-title">结构优化<text class="soon-tag">即将上线</text></view>
       <view class="card-meta">检查结构和表达。</view>
     </view>
-    <view class="card feature-card">
+    <view class="card feature-card" bindtap="goFeature" data-target="templates">
       <view class="feature-icon">📚</view>
       <view class="card-title">写作模板</view>
       <view class="card-meta">查看题型框架。</view>
     </view>
-    <view class="card feature-card">
+    <view class="card feature-card" bindtap="goFeature" data-target="mine">
       <view class="feature-icon">📝</view>
       <view class="card-title">本地记录</view>
       <view class="card-meta">保存批改记录。</view>

@@ -14,7 +14,7 @@ services:
       - key: DEEPSEEK_API_URL
         value: "https://api.deepseek.com/v1/chat/completions"
       - key: DEEPSEEK_MODEL
-        value: "deepseek-v4-flash"
+        value: "deepseek-chat"
       - key: ESSAY_MAX_CHARS
         value: "12000"
       - key: AI_RATE_LIMIT_PER_HOUR
@@ -31,6 +31,10 @@ services:
         value: "Qwen/Qwen3-VL-8B-Instruct"
       - key: VISION_API_URL
         value: "https://api.siliconflow.cn/v1/chat/completions"
+      - key: BARK_DEVICE_KEY
+        sync: false
+      - key: BARK_SERVER
+        value: "https://api.day.app"
       - key: FLASK_DEBUG
         value: "0"
     plan: free

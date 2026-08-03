@@ -58,7 +58,8 @@ python server.py
 | `SILICONFLOW_API_KEY` | SiliconFlow 嵌入 API 密钥 | ✅ |
 | `GITHUB_TOKEN` | GitHub Personal Access Token（数据自动同步） | ✅ |
 | `GITHUB_REPO` | GitHub 仓库（默认 zt130035-lang/shizheng-kb） | ❌ |
-| `BARK_DEVICE_KEY` | Bark 推送设备 Key | ❌ |
+| `BARK_DEVICE_KEY` | Bark 推送设备 Key，不配置则跳过推送 | ❌ |
+| `BARK_SERVER` | Bark 服务地址，默认 https://api.day.app | ❌ |
 | `CRON_SECRET` | 定时爬取鉴权密钥（默认 shizheng2026） | ❌ |
 | `DATA_DIR` | 数据目录（默认 /data） | ❌ |
 | `PORT` | 端口（默认 7860） | ❌ |
