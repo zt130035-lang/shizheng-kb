@@ -37,7 +37,7 @@
   "style": "v2",
   "sitemapLocation": "sitemap.json",
   "networkTimeout": {
-    "request": 240000,
+    "request": 480000,
     "uploadFile": 240000,
     "downloadFile": 120000,
     "connectSocket": 120000

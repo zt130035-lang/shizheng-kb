@@ -4,7 +4,7 @@ module.exports = {
   reviewEssayImage: (path, data, onProgress) => uploadTo('/api/essay/image-review', path, data || {}, 'file', 240000, onProgress),
   ocrEssayImage: (path, data, onProgress) => uploadTo('/api/essay/ocr-image', path, data || {}, 'file', 240000, onProgress),
   uploadPaperFile: (path, onProgress) => uploadTo('/api/essay/paper-upload', path, {}, 'file', 180000, onProgress),
-  reviewEssayText: (data) => postJson('/api/essay/review', data || {}, 240000),
+  reviewEssayText: (data) => postJson('/api/essay/review', data || {}, 300000),
   exportEssay: (data) => new Promise((resolve, reject) => {
     wx.request({
       url: getBaseUrl() + '/api/essay/export',
@@ -21,6 +21,6 @@ module.exports = {
       fail: reject
     })
   }),
-  reviewEssaySet: (path, data, onProgress) => uploadTo('/api/essay/full-review', path, data || {}, 'file', 240000, onProgress),
-  reviewEssaySetText: (data) => postJson('/api/essay/full-review', data || {}, 240000)
+  reviewEssaySet: (path, data, onProgress) => uploadTo('/api/essay/full-review', path, data || {}, 'file', 480000, onProgress),
+  reviewEssaySetText: (data) => postJson('/api/essay/full-review', data || {}, 480000)
 }
