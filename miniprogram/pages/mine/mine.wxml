@@ -24,6 +24,25 @@
   </view>
 
   <view class="section card">
+    <view class="section-title">接口地址（调试）</view>
+    <view class="divider"></view>
+    <view class="tip-line">当前：{{baseUrl}}</view>
+    <view class="tip-line">模拟器调本地后端填 http://127.0.0.1:5678，并勾选「不校验合法域名」；真机会自动回落线上地址。</view>
+    <input class="input base-input" value="{{baseUrlInput}}" bindinput="onBaseUrlInput" placeholder="https://shizheng-kb.onrender.com" />
+    <view class="base-actions">
+      <button class="mini-btn" bindtap="saveBaseUrl">保存</button>
+      <button class="mini-btn ghost-mini" bindtap="resetBaseUrl">恢复线上</button>
+    </view>
+  </view>
+
+  <view class="section card">
+    <view class="section-title">真题库</view>
+    <view class="divider"></view>
+    <view class="tip-line">导入整卷真题（PDF/Word/TXT/MD），AI 自动拆题入库，可在「真题」tab 查看和仿写。</view>
+    <button class="import-btn" bindtap="chooseExamFile" disabled="{{importing}}">{{importing ? '导入中…' : '导入整卷真题'}}</button>
+  </view>
+
+  <view class="section card">
     <view class="section-title">说明</view>
     <view class="divider"></view>
     <view class="tip-line" wx:for="{{tips}}" wx:key="*this">{{index + 1}}. {{item}}</view>

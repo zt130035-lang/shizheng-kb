@@ -9,3 +9,5 @@ data/user_data.json
 data/pdf_uploads/*.pdf
 .plan
 data/review_cache.json
+data/exam_bank/jobs/
+*.bak-*

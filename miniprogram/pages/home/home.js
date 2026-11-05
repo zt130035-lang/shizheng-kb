@@ -15,6 +15,10 @@ Page({
     wx.switchTab({ url: '/pages/templates/templates' })
   },
 
+  goExam() {
+    wx.switchTab({ url: '/pages/exam/exam' })
+  },
+
   goFeature(e) {
     const target = e.currentTarget.dataset.target
     if (target === 'structure') {

@@ -25,6 +25,7 @@ fullWidth: true
 | 📊 学习统计 | 追踪学习进度，数据驱动备考 |
 | ⚙️ 知识库管理 | 创建/删除知识库，上传文本入库 |
 | 📝 申论整套批改 | 上传整套材料与题目，逐题核对要点、估算评分并给出修改答案 |
+| 📚 国考真题库 | 2022–2026 国考申论（行政执法类）逐题收录题干、参考作答、评分要点与仿写拆解 |
 
 ## 技术栈
 
@@ -47,6 +48,24 @@ python server.py
 ```
 
 浏览器打开 http://localhost:5678
+
+本地密钥放在项目根目录 `.env`（已加入 `.gitignore`，不会提交）。`server.py` 启动时会自动加载它，**已存在的系统环境变量优先**，不会被覆盖：
+
+```ini
+# 阿里百炼 DashScope（OpenAI 兼容端点）
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+DEEPSEEK_MODEL=qwen-plus
+REVIEW_MODEL=qwen-plus          # 批改
+PREPARE_MODEL=qwen-plus         # 审题
+VISION_API_KEY=sk-xxx           # 图片 OCR / 图片批改
+VISION_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+VISION_MODEL=qwen3-vl-plus
+```
+
+- 文本任务也可以用百炼的 `deepseek-v4.1-flash`；它是推理模型，长输出任务建议留足 `max_tokens`。
+- 语义检索（`/api/query`、批改时的素材召回）仍走 SiliconFlow：未配置 `SILICONFLOW_API_KEY` 时检索自动降级为只用 `essay_vault` 规则，不影响批改和出答案。
+- 云端部署仍用 Render 的环境变量，二者互不影响。
 
 ## 云端部署（Render.com）
 
@@ -114,3 +133,21 @@ Render 免费版无持久磁盘，每次重启文件系统重置。本项目通�
 整套批改还支持粘贴或上传官方参考答案/分值，并可将批改结果导出为 DOCX 或 PDF。临时上传文件会在启动和上传时清理过期记录。
 
 考生答案为可选项：只提交材料与题目时，接口进入参考模式，生成题型判断、材料要点、参考答案和评分点；提交考生答案后，才进行命中、漏点、失分和修改对照。
+
+## 国考真题库（行政执法卷）
+
+小程序新增「真题」tab，收录 2022–2026 国考申论（行政执法类）五套卷，逐题展示题干、题型、分值、参考作答、评分要点与仿写拆解。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/exam/papers` | 试卷索引（年份、题数、已备答案数、题型集合） |
+| `GET /api/exam/papers/<paper_id>` | 单套卷全文与逐题答案 |
+| `POST /api/exam/papers/<paper_id>/questions/<qid>/answer` | 生成/读取某题的 AI 参照答案（`force` 可强制重生成） |
+| `POST /api/exam/papers/<paper_id>/generate-all` | 后台批量生成整卷答案（202 + 轮询进度） |
+| `GET /api/exam/papers/<paper_id>/generate-status` | 查询整卷生成任务进度 |
+| `POST /api/exam/imitate` | 仿写示范 / 结构拆解 / 可套用句式，`mode` 三选一 |
+| `POST /api/exam/import` | 导入整卷文字或 PDF/Word，AI 拆题入库 |
+
+数据分层存放在 `DATA_DIR/exam_bank/`：内置种子（随镜像 COPY 进 `/data/exam_bank/`）→ `imported/`（用户导入，覆盖种子）→ `answers/`（答案覆盖，只合并答案字段）。三层都会通过 `git_sync_to_github` 增量推回仓库（`jobs/` 任务进度除外），Render 重启后答案与导入卷可恢复。
+
+**答案来源**：国考申论官方从不公布标准答案。页面里的答案按 `answer_kind` 标注 —— `ai` 为「AI 参照答案 · 非官方」（按 `essay_vault` 评分规则生成），`imported` 为用户导入的机构版答案，`official` 保留给真实官方来源。题干与材料带 `verified` 标记，未核对的卷会显示「题干待核对」。

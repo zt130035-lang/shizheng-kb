@@ -41,6 +41,7 @@
 
   <view class="section action-panel">
     <button class="btn" bindtap="goReview">开始批改</button>
+    <button class="btn secondary" bindtap="goExam">看真题答案</button>
     <button class="btn secondary" bindtap="goTemplates">看模板</button>
   </view>
 </view>

@@ -2,8 +2,10 @@
   "pages": [
     "pages/home/home",
     "pages/query/query",
+    "pages/exam/exam",
     "pages/templates/templates",
-    "pages/mine/mine"
+    "pages/mine/mine",
+    "pages/exam-detail/exam-detail"
   ],
   "window": {
     "navigationBarTitleText": "申论批改",
@@ -23,6 +25,10 @@
       {
         "pagePath": "pages/query/query",
         "text": "批改"
+      },
+      {
+        "pagePath": "pages/exam/exam",
+        "text": "真题"
       },
       {
         "pagePath": "pages/templates/templates",

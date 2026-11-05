@@ -1,0 +1,18 @@
+.filter-card{padding-bottom:20rpx}
+.filter-label{margin-top:14rpx;color:#1C2740;font-size:25rpx;font-weight:700}
+.filter-label:first-child{margin-top:0}
+.chip-row{display:flex;flex-wrap:wrap;gap:12rpx;margin-top:12rpx}
+.chip{padding:10rpx 22rpx;border:1rpx solid #D5DCE8;border-radius:999rpx;background:#FFFFFF;color:#5B6472;font-size:24rpx;line-height:1.4}
+.chip.active{border-color:#2F6BFF;background:#2F6BFF;color:#FFFFFF;font-weight:700}
+
+.paper-card{padding-bottom:20rpx}
+.paper-head{display:flex;align-items:flex-start;gap:16rpx}
+.paper-year{flex:0 0 92rpx;width:92rpx;height:92rpx;border-radius:22rpx;background:#EEF3FF;color:#2F6BFF;font-size:30rpx;font-weight:850;display:flex;align-items:center;justify-content:center}
+.paper-body{flex:1;min-width:0}
+.paper-arrow{flex:0 0 auto;color:#C3CBDA;font-size:40rpx;line-height:1;padding-top:10rpx}
+.paper-tags{display:flex;flex-wrap:wrap;gap:10rpx;margin-top:16rpx}
+.paper-pending{margin-top:14rpx;padding:12rpx 16rpx;border-radius:14rpx;background:#FFF7EB;color:#9A6A1F;font-size:23rpx;line-height:1.55}
+.guide-card{background:#F7FAFF}
+.debug-hint{margin-top:12rpx;color:#8A93A6;font-size:23rpx;line-height:1.6;word-break:break-all}
+.retry-btn{margin-top:20rpx}
+.tip-line{font-size:25rpx;color:#5B6472;line-height:1.75;margin:8rpx 0}

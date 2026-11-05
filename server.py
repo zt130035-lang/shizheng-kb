@@ -63,6 +63,8 @@ ESSAY_VAULT_DIR = os.path.join(BASE_DIR, "essay_vault")
 ESSAY_MATERIALS_COLLECTION = "essay_materials"
 ESSAY_KNOWLEDGE_DB_DIR = os.path.join(DATA_DIR, "essay_knowledge_db")
 ESSAY_TEMP_DIR = os.path.join(DATA_DIR, "essay_temp")
+# 真题库运行时根目录:exam_bank/<paper_id>.json(种子) < imported/ < answers/
+EXAM_BANK_DIR = os.path.join(DATA_DIR, "exam_bank")
 
 # 确保目录存在
 for d in [NEWS_ARCHIVE_DIR, DAILY_REPORTS_DIR, KNOWLEDGE_DB_DIR, PDF_UPLOADS_DIR, IMAGE_UPLOADS_DIR, TOPICS_DIR, MORNING_CARDS_DIR, ESSAY_TEMP_DIR]:
@@ -85,6 +87,33 @@ _cleanup_old_files(IMAGE_UPLOADS_DIR)
 
 # 用户数据文件
 USER_DATA_FILE = os.path.join(DATA_DIR, "user_data.json")
+
+# ========== 本地开发环境变量 ==========
+# 本地调试时把密钥写进项目根目录 .env(已在 .gitignore 中),这里做最小解析,
+# 不引入 python-dotenv;已存在的真实环境变量优先,不会被 .env 覆盖。
+def _load_local_env(path: str = os.path.join(BASE_DIR, ".env")) -> None:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+_load_local_env()
 
 # ========== API 配置 ==========
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY", "")
@@ -206,6 +235,9 @@ def enforce_expensive_api_rate_limits():
         return _enforce_rate_limit("crawl", CRAWL_RATE_LIMIT_PER_HOUR)
     if path in _AI_RATE_LIMIT_PATHS:
         return _enforce_rate_limit("ai", AI_RATE_LIMIT_PER_HOUR)
+    # 真题库的写接口(生成答案/仿写/导入)全部走 AI 限流桶,前缀判断避免逐条枚举
+    if path.startswith("/api/exam/"):
+        return _enforce_rate_limit("ai", AI_RATE_LIMIT_PER_HOUR)
     return None
 
 
@@ -300,6 +332,46 @@ def _save_sync_state(state: dict):
         print(f"[GIT-SYNC] 保存同步状态失败: {e}")
 
 
+def _collect_sync_files() -> list:
+    """收集需要推送到 GitHub 的数据文件(本地绝对路径, 仓库相对路径)。
+
+    真题库三层(种子 / imported / answers)一并同步: Render 免费版 /data 不持久,
+    生成的参考答案和导入的整卷只能靠仓库恢复; jobs/ 下的任务进度不参与同步。"""
+    sync_files = []
+
+    # 新闻归档
+    for f in glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md")):
+        sync_files.append((f, f"data/news_archive/{os.path.basename(f)}"))
+
+    # 日报
+    for f in glob.glob(os.path.join(DAILY_REPORTS_DIR, "*.md")):
+        sync_files.append((f, f"data/daily_reports/{os.path.basename(f)}"))
+
+    # 时政热点专题
+    for f in glob.glob(os.path.join(TOPICS_DIR, "*.md")):
+        sync_files.append((f, f"data/topics/{os.path.basename(f)}"))
+
+    # 时政晨读卡
+    for f in glob.glob(os.path.join(MORNING_CARDS_DIR, "*.json")):
+        sync_files.append((f, f"data/morning_cards/{os.path.basename(f)}"))
+
+    # 题库 JSON
+    pdf_q_dir = os.path.join(DATA_DIR, "pdf_questions")
+    if os.path.isdir(pdf_q_dir):
+        for f in glob.glob(os.path.join(pdf_q_dir, "*.json")):
+            sync_files.append((f, f"data/pdf_questions/{os.path.basename(f)}"))
+
+    # 真题库: 种子卷 + 用户导入 + AI 答案覆盖
+    if os.path.isdir(EXAM_BANK_DIR):
+        for f in sorted(glob.glob(os.path.join(EXAM_BANK_DIR, "*.json"))):
+            sync_files.append((f, f"data/exam_bank/{os.path.basename(f)}"))
+        for layer in ("imported", "answers"):
+            for f in sorted(glob.glob(os.path.join(EXAM_BANK_DIR, layer, "*.json"))):
+                sync_files.append((f, f"data/exam_bank/{layer}/{os.path.basename(f)}"))
+
+    return sync_files
+
+
 def git_sync_to_github(message: str = "auto: sync data"):
     """将数据文件增量同步到GitHub(通过API,无需本地git)。
     内容未变化的文件复用已上传的 blob sha,只为新增/变更文件发请求。"""
@@ -315,34 +387,7 @@ def git_sync_to_github(message: str = "auto: sync data"):
     }
 
     # 收集需要同步的文件
-    sync_files = []
-
-    # 新闻归档
-    for f in glob.glob(os.path.join(NEWS_ARCHIVE_DIR, "*.md")):
-        rel_path = f"data/news_archive/{os.path.basename(f)}"
-        sync_files.append((f, rel_path))
-
-    # 日报
-    for f in glob.glob(os.path.join(DAILY_REPORTS_DIR, "*.md")):
-        rel_path = f"data/daily_reports/{os.path.basename(f)}"
-        sync_files.append((f, rel_path))
-
-    # 时政热点专题
-    for f in glob.glob(os.path.join(TOPICS_DIR, "*.md")):
-        rel_path = f"data/topics/{os.path.basename(f)}"
-        sync_files.append((f, rel_path))
-
-    # 时政晨读卡
-    for f in glob.glob(os.path.join(MORNING_CARDS_DIR, "*.json")):
-        rel_path = f"data/morning_cards/{os.path.basename(f)}"
-        sync_files.append((f, rel_path))
-
-    # 题库 JSON
-    pdf_q_dir = os.path.join(DATA_DIR, "pdf_questions")
-    if os.path.isdir(pdf_q_dir):
-        for f in glob.glob(os.path.join(pdf_q_dir, "*.json")):
-            rel_path = f"data/pdf_questions/{os.path.basename(f)}"
-            sync_files.append((f, rel_path))
+    sync_files = _collect_sync_files()
 
     if not sync_files:
         print("[GIT-SYNC] 无文件需要同步")
@@ -473,6 +518,9 @@ def git_sync_to_github(message: str = "auto: sync data"):
 def get_embedding(texts: List[str]) -> List[List[float]]:
     """调用SiliconFlow获取文本向量。带本地缓存(按文本md5)与指数退避重试。"""
     if not texts:
+        return []
+    # 本地只配了对话模型时没有嵌入密钥,直接返回空让调用方降级,不做无谓重试
+    if not SILICONFLOW_API_KEY:
         return []
 
     # 先查缓存，命中的直接复用，未命中的才请求
@@ -3794,6 +3842,980 @@ def essay_image_review():
             os.remove(filepath)
         except OSError:
             pass
+
+# ========== 真题库 ==========
+# 数据分三层,后层覆盖前层:exam_bank/<paper_id>.json(种子)< imported/ < answers/
+# answers/ 只覆盖答案字段,不改变题干等静态信息。
+_EXAM_PAPER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_EXAM_QUESTION_TYPES = ("归纳概括", "综合分析", "提出对策", "应用文", "大作文", "其他")
+# 列表页题型筛选项不含"其他"
+_EXAM_FILTER_TYPES = ("归纳概括", "综合分析", "提出对策", "应用文", "大作文")
+_EXAM_ANSWER_KINDS = frozenset({"official", "imported", "ai"})
+_EXAM_ANSWER_FIELDS = (
+    "reference_answer",
+    "answer_kind",
+    "answer_source",
+    "score_points",
+    "structure",
+    "imitate_tips",
+)
+_EXAM_QUESTION_VIEW_FIELDS = (
+    "id",
+    "no",
+    "type",
+    "task",
+    "max_score",
+    "material_ref",
+    "reference_answer",
+    "answer_kind",
+    "answer_source",
+    "score_points",
+    "structure",
+    "imitate_tips",
+)
+_EXAM_IMITATE_MODES = frozenset({"imitate", "outline", "phrases"})
+# 常见卷别 -> 文件 slug;未知卷别用哈希兜底,保证 paper_id 唯一且只含安全字符
+_EXAM_PAPER_SLUGS = {
+    "行政执法": "xingzheng",
+    "行政执法类": "xingzheng",
+    "副省级": "fushengji",
+    "副省级以上": "fushengji",
+    "市地级": "shidiji",
+    "地市级": "dishi",
+    "地市及以下": "dishi",
+}
+# 多请求并发写同一份 answers/imported 文件时串行化
+_EXAM_BANK_LOCK = threading.Lock()
+
+
+def _is_valid_exam_id(value) -> bool:
+    """校验 paper_id / qid:只允许 [A-Za-z0-9_-]{1,64},用于阻断路径穿越。"""
+    if not isinstance(value, str):
+        return False
+    return _EXAM_PAPER_ID_RE.match(value) is not None
+
+
+def _exam_text(value) -> str:
+    """把任意值规范成去空白字符串,None 视为空串。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _exam_text_list(value) -> list:
+    """把列表/单值规范成字符串列表,过滤空项。"""
+    if isinstance(value, (list, tuple)):
+        return [text for text in (_exam_text(item) for item in value) if text]
+    text = _exam_text(value)
+    return [text] if text else []
+
+
+def _exam_number(value):
+    """分值规范:非法/负数返回 0,整数返回 int,其余保留 1 位小数。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not (0 <= number <= 100000):
+        return 0
+    return int(number) if number.is_integer() else round(number, 1)
+
+
+def _exam_bank_layer_dir(layer: str = "") -> str:
+    """返回某层目录;layer 只接受 "", "imported", "answers"。"""
+    if layer == "":
+        return EXAM_BANK_DIR
+    if layer in ("imported", "answers"):
+        return os.path.join(EXAM_BANK_DIR, layer)
+    return ""
+
+
+def _exam_bank_file(layer: str, paper_id: str) -> str:
+    """拼接读写路径:paper_id 非法或越界一律返回空串,调用方不得落盘。"""
+    if not _is_valid_exam_id(paper_id):
+        return ""
+    directory = _exam_bank_layer_dir(layer)
+    if not directory:
+        return ""
+    # _resolve_within 再做一次 realpath 兜底,防止软链接/编排错误导致越界
+    return _resolve_within(directory, f"{paper_id}.json")
+
+
+def _read_exam_json(path: str):
+    """读取 JSON 对象;文件不存在/损坏返回 None。"""
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_exam_json(path: str, payload: dict) -> bool:
+    """原子写:先写临时文件再 rename,避免并发或中断写坏 JSON。"""
+    if not path:
+        return False
+    tmp = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        print(f"[EXAM] 写入失败 {os.path.basename(path)}: {exc}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _normalize_exam_question(raw, fallback_no: int) -> dict:
+    """把原始题目规范成契约字段;未知扩展字段原样保留。"""
+    raw = raw if isinstance(raw, dict) else {}
+    qid = _exam_text(raw.get("id")) or str(fallback_no)
+    if not _is_valid_exam_id(qid):
+        qid = str(fallback_no)
+    try:
+        no = int(raw.get("no"))
+    except (TypeError, ValueError):
+        no = fallback_no
+    if no <= 0:
+        no = fallback_no
+    qtype = _exam_text(raw.get("type"))
+    if qtype not in _EXAM_QUESTION_TYPES:
+        qtype = "其他"
+    kind = _exam_text(raw.get("answer_kind"))
+    if kind not in _EXAM_ANSWER_KINDS:
+        kind = ""
+    question = {
+        "id": qid,
+        "no": no,
+        "type": qtype,
+        "task": _exam_text(raw.get("task")),
+        "max_score": _exam_number(raw.get("max_score")),
+        "material_ref": _exam_text(raw.get("material_ref")),
+        "reference_answer": _exam_text(raw.get("reference_answer")),
+        "answer_kind": kind,
+        "answer_source": _exam_text(raw.get("answer_source")),
+        "score_points": _exam_text_list(raw.get("score_points")),
+        "structure": _exam_text_list(raw.get("structure")),
+        "imitate_tips": _exam_text(raw.get("imitate_tips")),
+    }
+    for key, value in raw.items():
+        if key not in question:
+            question[key] = value
+    return question
+
+
+def _normalize_exam_paper(raw, paper_id: str) -> dict:
+    """规范整卷字段;题目按 id 去重并补齐默认值。"""
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        year = int(raw.get("year"))
+    except (TypeError, ValueError):
+        year = 0
+    if year < 0 or year > 9999:
+        year = 0
+    raw_questions = raw.get("questions")
+    questions = []
+    seen = set()
+    if isinstance(raw_questions, list):
+        for index, item in enumerate(raw_questions, 1):
+            if not isinstance(item, dict):
+                continue
+            question = _normalize_exam_question(item, index)
+            if question["id"] in seen:
+                continue
+            seen.add(question["id"])
+            questions.append(question)
+    paper = {
+        "id": paper_id,
+        "year": year,
+        "paper": _exam_text(raw.get("paper")),
+        "title": _exam_text(raw.get("title")),
+        "exam_date": _exam_text(raw.get("exam_date")),
+        "materials": _exam_text(raw.get("materials")),
+        "source": _exam_text(raw.get("source")),
+        "source_url": _exam_text(raw.get("source_url")),
+        "verified": bool(raw.get("verified")),
+        "questions": questions,
+    }
+    for key, value in raw.items():
+        if key not in paper:
+            paper[key] = value
+    return paper
+
+
+def _merge_exam_questions(base_questions, override_questions) -> list:
+    """按 id 合并题目:override 覆盖同 id 字段,新 id 追加到末尾。"""
+    merged = []
+    positions = {}
+    for raw in base_questions if isinstance(base_questions, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        question = dict(raw)
+        qid = _exam_text(question.get("id"))
+        if qid:
+            positions[qid] = len(merged)
+        merged.append(question)
+    for raw in override_questions if isinstance(override_questions, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        question = dict(raw)
+        qid = _exam_text(question.get("id"))
+        if qid and qid in positions:
+            merged[positions[qid]].update(question)
+        else:
+            if qid:
+                positions[qid] = len(merged)
+            merged.append(question)
+    return merged
+
+
+def _merge_exam_paper(base, override) -> dict:
+    """合并同层试卷文件(种子 < imported):顶层覆盖,questions 按 id 合并。"""
+    merged = dict(base or {})
+    if not isinstance(override, dict):
+        return merged
+    for key, value in override.items():
+        if key == "questions":
+            merged["questions"] = _merge_exam_questions(merged.get("questions"), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _apply_exam_answers(paper: dict, answer_file) -> dict:
+    """应用 answers 层:只覆盖答案字段,题干/材料等静态信息保持不变。"""
+    if not isinstance(answer_file, dict):
+        return paper
+    answers = answer_file.get("answers")
+    if not isinstance(answers, dict):
+        return paper
+    for question in paper.get("questions") or []:
+        if not isinstance(question, dict):
+            continue
+        entry = answers.get(_exam_text(question.get("id")))
+        if not isinstance(entry, dict):
+            continue
+        for field in _EXAM_ANSWER_FIELDS:
+            if field in entry:
+                question[field] = entry[field]
+    return paper
+
+
+def _load_exam_paper(paper_id: str):
+    """加载三层数据并合并;试卷不存在返回 None。"""
+    if not _is_valid_exam_id(paper_id):
+        return None
+    base = _read_exam_json(_exam_bank_file("", paper_id))
+    imported = _read_exam_json(_exam_bank_file("imported", paper_id))
+    answers = _read_exam_json(_exam_bank_file("answers", paper_id))
+    if base is None and imported is None:
+        return None
+    paper = _merge_exam_paper(base, imported)
+    paper = _normalize_exam_paper(paper, paper_id)
+    paper = _apply_exam_answers(paper, answers)
+    # 二次规范化:answers 层写入的原始值也要按契约清洗
+    return _normalize_exam_paper(paper, paper_id)
+
+
+def _exam_paper_ids() -> list:
+    """扫描种子层与 imported 层的试卷 id;answers 层不单独成卷。"""
+    paper_ids = []
+    seen = set()
+    for layer in ("", "imported"):
+        directory = _exam_bank_layer_dir(layer)
+        for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
+            paper_id = os.path.splitext(os.path.basename(path))[0]
+            if not _is_valid_exam_id(paper_id) or paper_id in seen:
+                continue
+            seen.add(paper_id)
+            paper_ids.append(paper_id)
+    return paper_ids
+
+
+def _find_exam_question(paper: dict, qid: str):
+    """按 id 找题;找不到返回 None。"""
+    for question in paper.get("questions") or []:
+        if isinstance(question, dict) and _exam_text(question.get("id")) == qid:
+            return question
+    return None
+
+
+def _exam_paper_summary(paper: dict) -> dict:
+    """列表页试卷摘要。"""
+    questions = [q for q in (paper.get("questions") or []) if isinstance(q, dict)]
+    total_score = sum(_exam_number(q.get("max_score")) for q in questions)
+    total_score = int(total_score) if float(total_score).is_integer() else round(total_score, 1)
+    answered_count = 0
+    ai_answered_count = 0
+    for question in questions:
+        if not _exam_text(question.get("reference_answer")):
+            continue
+        answered_count += 1
+        if question.get("answer_kind") == "ai":
+            ai_answered_count += 1
+    return {
+        "id": paper.get("id", ""),
+        "year": paper.get("year", 0),
+        "paper": paper.get("paper", ""),
+        "title": paper.get("title", ""),
+        "question_count": len(questions),
+        "total_score": total_score,
+        "answered_count": answered_count,
+        "ai_answered_count": ai_answered_count,
+        "has_materials": bool(_exam_text(paper.get("materials"))),
+        "source": paper.get("source", ""),
+        "verified": bool(paper.get("verified")),
+    }
+
+
+def _exam_question_view(question) -> dict:
+    """详情页题目对象:契约字段 + ai_generated 标记。"""
+    question = question if isinstance(question, dict) else {}
+    view = {field: question.get(field) for field in _EXAM_QUESTION_VIEW_FIELDS}
+    view["ai_generated"] = question.get("answer_kind") == "ai"
+    for key, value in question.items():
+        if key not in view:
+            view[key] = value
+    return view
+
+
+def _save_exam_answer(paper_id: str, qid: str, entry: dict) -> bool:
+    """把单题答案合并进 answers/<paper_id>.json(原子写)。"""
+    path = _exam_bank_file("answers", paper_id)
+    if not path or not _is_valid_exam_id(qid):
+        return False
+    with _EXAM_BANK_LOCK:
+        record = _read_exam_json(path) or {}
+        answers = record.get("answers")
+        if not isinstance(answers, dict):
+            answers = {}
+        answers[qid] = entry
+        return _write_exam_json(path, {
+            "paper_id": paper_id,
+            "updated_at": _now().strftime("%Y-%m-%d %H:%M:%S"),
+            "answers": answers,
+        })
+
+
+# --- 整卷答案批量生成:后台线程 + 文件进度,兼容 gunicorn 多 worker ---
+_EXAM_JOB_STALE_SECONDS = 900
+_EXAM_JOB_AUTHORITATIVE_KINDS = ("official", "imported")
+
+
+def _exam_jobs_dir() -> str:
+    """任务进度目录(不参与 GitHub 同步);运行时计算,便于测试替换 EXAM_BANK_DIR。"""
+    return os.path.join(EXAM_BANK_DIR, "jobs")
+
+
+def _exam_job_path(paper_id: str) -> str:
+    """任务进度文件路径;jobs/ 不参与 GitHub 同步。"""
+    if not _is_valid_exam_id(paper_id):
+        return ""
+    os.makedirs(_exam_jobs_dir(), exist_ok=True)
+    return _resolve_within(_exam_jobs_dir(), f"{paper_id}.json")
+
+
+def _exam_job_lock_path(paper_id: str) -> str:
+    if not _is_valid_exam_id(paper_id):
+        return ""
+    os.makedirs(_exam_jobs_dir(), exist_ok=True)
+    return _resolve_within(_exam_jobs_dir(), f"{paper_id}.lock")
+
+
+def _read_exam_job(paper_id: str) -> dict:
+    job = _read_exam_json(_exam_job_path(paper_id))
+    return job if isinstance(job, dict) else {}
+
+
+def _update_exam_job(paper_id: str, **fields) -> dict:
+    """合并更新任务进度并落盘;updated_ts 用于判断任务是否已失联。"""
+    job = _read_exam_job(paper_id)
+    job.update(fields)
+    job["paper_id"] = paper_id
+    job["updated_ts"] = time.time()
+    job["updated_at"] = _now().strftime("%Y-%m-%d %H:%M:%S")
+    _write_exam_json(_exam_job_path(paper_id), job)
+    return job
+
+
+def _exam_job_is_running(paper_id: str) -> bool:
+    job = _read_exam_job(paper_id)
+    if job.get("status") != "running":
+        return False
+    try:
+        return time.time() - float(job.get("updated_ts") or 0) < _EXAM_JOB_STALE_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
+def _claim_exam_job(paper_id: str) -> bool:
+    """用 O_EXCL 锁文件抢占任务,避免多 worker 重复生成;超过 15 分钟的锁视为失联可接管。"""
+    lock_path = _exam_job_lock_path(paper_id)
+    if not lock_path:
+        return False
+    for attempt in range(2):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                stale = time.time() - os.path.getmtime(lock_path) > _EXAM_JOB_STALE_SECONDS
+            except OSError:
+                stale = False
+            if stale and attempt == 0:
+                try:
+                    os.remove(lock_path)
+                except OSError:
+                    pass
+                continue
+            return False
+        except OSError as exc:
+            print(f"[EXAM-JOB] 抢占任务锁失败: {exc}")
+            return False
+    return False
+
+
+def _release_exam_job(paper_id: str) -> None:
+    lock_path = _exam_job_lock_path(paper_id)
+    if not lock_path:
+        return
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
+def _exam_job_payload(paper_id: str) -> dict:
+    """返回给前端的任务状态;没有任务文件时给 idle。"""
+    job = _read_exam_job(paper_id)
+    if not job:
+        return {
+            "paper_id": paper_id,
+            "status": "idle",
+            "total": 0,
+            "done": 0,
+            "failed": 0,
+            "current": "",
+            "message": "",
+        }
+    return {
+        "paper_id": job.get("paper_id", paper_id),
+        "status": job.get("status", "idle"),
+        "total": int(job.get("total") or 0),
+        "done": int(job.get("done") or 0),
+        "failed": int(job.get("failed") or 0),
+        "current": _exam_text(job.get("current")),
+        "message": _exam_text(job.get("message")),
+        "started_at": _exam_text(job.get("started_at")),
+        "updated_at": _exam_text(job.get("updated_at")),
+        "updated_ts": float(job.get("updated_ts") or 0),
+    }
+
+
+def _exam_job_targets(paper: dict, force: bool) -> list:
+    """挑出需要生成的题目:官方/导入答案永不覆盖;force 时重生成 AI 答案。"""
+    targets = []
+    for question in paper.get("questions") or []:
+        if not isinstance(question, dict):
+            continue
+        if _exam_text(question.get("answer_kind")) in _EXAM_JOB_AUTHORITATIVE_KINDS:
+            continue
+        if force or not _exam_text(question.get("reference_answer")):
+            targets.append(question)
+    return targets
+
+
+def _run_exam_generate_job(paper_id: str, force: bool = False) -> dict:
+    """后台线程主体:逐题生成参考答案,更新进度文件,完成后尝试同步 GitHub。"""
+    status = "failed"
+    message = ""
+    total = 0
+    done = 0
+    failed = 0
+    try:
+        paper = _load_exam_paper(paper_id)
+        if not paper:
+            raise ValueError("试卷不存在")
+        targets = _exam_job_targets(paper, force)
+        total = len(targets)
+        _update_exam_job(paper_id, status="running", total=total, done=0, failed=0,
+                         current="", message="")
+        for question in targets:
+            qid = _exam_text(question.get("id"))
+            _update_exam_job(paper_id, current=qid)
+            generated = _generate_exam_answer(paper, question)
+            if not generated or not _save_exam_answer(paper_id, qid, generated):
+                failed += 1
+                message = "部分题目生成失败，可重试"
+            else:
+                done += 1
+            _update_exam_job(paper_id, done=done, failed=failed, current="", message=message)
+        status = "failed" if failed else "done"
+        if not targets:
+            message = "该卷答案已齐全（官方/导入答案不覆盖）"
+    except Exception as exc:
+        print(f"[EXAM-JOB] 整卷生成失败 {paper_id}: {exc}")
+        status = "failed"
+        message = f"生成失败: {exc}"
+    finally:
+        _update_exam_job(paper_id, status=status, total=total, done=done, failed=failed,
+                         current="", message=message)
+        _release_exam_job(paper_id)
+        if status == "done" and done:
+            # 答案落盘后推一次仓库,避免 Render 重启丢失
+            try:
+                git_sync_to_github(f"auto: exam answers {paper_id} ({done} 题)")
+            except Exception as exc:
+                print(f"[EXAM-JOB] GitHub 同步失败: {exc}")
+    return _exam_job_payload(paper_id)
+
+
+def _exam_answer_prompt(paper: dict, question: dict) -> str:
+    """拼装 AI 参考答案 prompt:注入评分规则 + 该题型评分标准 + 题干 + 材料。"""
+    guidance = _load_essay_guidance(max_chars=6000)
+    standard = _load_standard_for_type(question.get("type", ""))
+    materials = _exam_text(paper.get("materials"))[:8000] or "（未提供材料）"
+    lines = [
+        "请根据国考申论（行政执法类）评分规则，为下面这道真题撰写一份参考答案。",
+        "要求：紧扣给定材料、按评分要点作答，不虚构材料内容；此答案仅供练习参照，不是官方答案。",
+        "",
+        f"【题型】{question.get('type') or '其他'}",
+        f"【题目】{_exam_text(question.get('task'))}",
+    ]
+    if question.get("max_score"):
+        lines.append(f"【分值】{question['max_score']} 分")
+    if _exam_text(question.get("material_ref")):
+        lines.append(f"【对应材料】{_exam_text(question.get('material_ref'))}")
+    lines.append("")
+    lines.append(f"【给定材料（可能截断）】\n{materials}")
+    if standard:
+        lines.append(f"\n【该题型评分标准】\n{standard}")
+    if guidance:
+        lines.append(f"\n【申论评分规则与批改风格】\n{guidance}")
+    lines.extend([
+        "",
+        "请严格输出合法 JSON（不要 Markdown 代码块、不要额外解释）：",
+        "{",
+        '  "reference_answer": "完整参考答案正文",',
+        '  "score_points": ["评分要点1", "评分要点2"],',
+        '  "structure": ["开头：……", "分论点1：……", "结尾：……"],',
+        '  "imitate_tips": "仿写提示（针对本题结构与表达，1-3 句）"',
+        "}",
+    ])
+    return "\n".join(lines)
+
+
+def _generate_exam_answer(paper: dict, question: dict):
+    """调用 AI 生成参考答案;解析失败/内容为空返回 None(调用方回 502)。"""
+    prompt = _exam_answer_prompt(paper, question)
+    system = (
+        "你是国考申论（行政执法类）命题与阅卷专家，只能依据给定材料和评分标准作答，"
+        "不得虚构材料内容。只输出合法 JSON。"
+    )
+    raw = call_deepseek(prompt, system, timeout=240, max_tokens=4096, model=REVIEW_MODEL)
+    parsed = _parse_json_loose(raw)
+    if not isinstance(parsed, dict):
+        return None
+    answer_value = parsed.get("reference_answer")
+    # 模型偶尔把正文拆成字符串数组,这里兼容拼接;其他类型视为解析失败
+    if isinstance(answer_value, (list, tuple)):
+        answer = "\n".join(_exam_text_list(answer_value))
+    elif isinstance(answer_value, str):
+        answer = answer_value.strip()
+    else:
+        answer = ""
+    if not answer:
+        return None
+    return {
+        "reference_answer": answer,
+        "answer_kind": "ai",
+        "answer_source": "AI 按申论评分规则生成（非官方）",
+        "score_points": _exam_text_list(parsed.get("score_points")),
+        "structure": _exam_text_list(parsed.get("structure")),
+        "imitate_tips": _exam_text(parsed.get("imitate_tips")),
+    }
+
+
+def _exam_imitate_prompt(paper: dict, question: dict, mode: str) -> str:
+    """拼装仿写/结构拆解/句式提炼 prompt。"""
+    qtype = question.get("type") or "其他"
+    parts = [
+        f"【题型】{qtype}",
+        f"【题目】{_exam_text(question.get('task'))}",
+    ]
+    if question.get("max_score"):
+        parts.append(f"【分值】{question['max_score']} 分")
+    parts.append(f"【参考答案】\n{_exam_text(question.get('reference_answer'))}")
+    score_points = _exam_text_list(question.get("score_points"))
+    if score_points:
+        parts.append("【评分要点】\n" + "\n".join(f"- {point}" for point in score_points))
+    structure = _exam_text_list(question.get("structure"))
+    if structure:
+        parts.append("【参考答案结构】\n" + "\n".join(f"- {item}" for item in structure))
+    standard = _load_standard_for_type(qtype)
+    if standard:
+        parts.append(f"【该题型评分标准】\n{standard}")
+    if mode == "outline":
+        instruction = (
+            "请拆解上面参考答案的结构：逐段说明各段承担什么功能、对应哪条得分点、"
+            "为什么这样安排。用 Markdown 小标题和条目输出，不要重写整篇答案。"
+        )
+    elif mode == "phrases":
+        instruction = (
+            "请从参考答案中提炼可以直接套用的句式与表述，最多10条；"
+            "每条一句话并注明适用场景。用 Markdown 列表输出。"
+        )
+    else:
+        instruction = (
+            "请以该参考答案为范本，写一篇同题型、同分值的【仿写示范】。"
+            "要求：换一个相近但不同的申论话题情境（不要照抄原题材料），"
+            "结构与得分点覆盖与参考答案一致；开头标注「仿写示范」。用 Markdown 输出。"
+        )
+    return "\n\n".join(parts) + f"\n\n【写作任务】\n{instruction}"
+
+
+def _exam_import_prompt(text: str, year: int, paper: str, filename: str = "") -> str:
+    """拼装整卷 AI 拆题 prompt(JSON 思路同 _full_review_prepare)。"""
+    return f"""请从下面的国考申论试卷文字中拆解整卷信息和每道小题，不要批改作答，不要虚构题目和材料。
+
+【年份（若用户已提供）】{year or '未知'}
+【卷别（若用户已提供）】{paper or '未知'}
+【文件名】{filename or '未提供'}
+
+【试卷文字】
+{text[:25000]}
+
+请严格输出合法 JSON（不要 Markdown 代码块、不要额外解释）：
+{{
+  "title": "试卷完整标题",
+  "year": 年份(未识别则填 0),
+  "paper": "行政执法/副省级/市地级等",
+  "exam_date": "考试日期 YYYY-MM-DD(未识别则空串)",
+  "source": "来源说明(未识别则空串)",
+  "questions": [
+    {{
+      "id": "1",
+      "no": 1,
+      "type": "归纳概括/综合分析/提出对策/应用文/大作文/其他",
+      "task": "题目要求原文",
+      "max_score": 分值(未给出则 0),
+      "material_ref": "给定资料1"
+    }}
+  ]
+}}"""
+
+
+def _parse_exam_import_result(raw):
+    """解析 AI 拆题结果;无效返回 None。"""
+    parsed = _parse_json_loose(raw)
+    if not isinstance(parsed, dict):
+        return None
+    raw_questions = parsed.get("questions")
+    if not isinstance(raw_questions, list):
+        return None
+    questions = []
+    for index, item in enumerate(raw_questions, 1):
+        if not isinstance(item, dict):
+            continue
+        item = dict(item)
+        if not _exam_text(item.get("task")):
+            item["task"] = _exam_text(item.get("question") or item.get("requirement"))
+        if not _exam_text(item.get("task")):
+            continue
+        if not _exam_text(item.get("id")):
+            item["id"] = str(index)
+        if not item.get("no"):
+            item["no"] = index
+        questions.append(_normalize_exam_question(item, index))
+    if not questions:
+        return None
+    try:
+        year = int(parsed.get("year"))
+    except (TypeError, ValueError):
+        year = 0
+    return {
+        "title": _exam_text(parsed.get("title")),
+        "year": year,
+        "paper": _exam_text(parsed.get("paper")),
+        "exam_date": _exam_text(parsed.get("exam_date")),
+        "source": _exam_text(parsed.get("source")),
+        "questions": questions,
+    }
+
+
+def _exam_parse_year(value) -> int:
+    """年份参数校验:非法或超范围返回 0。"""
+    try:
+        year = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return year if 1900 <= year <= 2100 else 0
+
+
+def _exam_paper_slug(paper: str) -> str:
+    """卷别 -> paper_id slug;未知中文卷别用哈希兜底避免冲突。"""
+    text = _exam_text(paper) or "行政执法"
+    if text in _EXAM_PAPER_SLUGS:
+        return _EXAM_PAPER_SLUGS[text]
+    ascii_slug = re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-").lower()
+    if ascii_slug:
+        return ascii_slug[:32]
+    return "paper-" + hashlib.md5(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _exam_build_paper_id(year: int, paper: str) -> str:
+    """构造 {year}-{paper_slug} 并校验为安全 id;失败返回空串。"""
+    paper_id = f"{year}-{_exam_paper_slug(paper)}"
+    return paper_id if _is_valid_exam_id(paper_id) else ""
+
+
+@app.route("/api/exam/papers", methods=["GET"])
+def exam_list_papers():
+    """真题库索引:按年份倒序返回试卷摘要、年份与题型筛选项。"""
+    papers = []
+    for paper_id in _exam_paper_ids():
+        paper = _load_exam_paper(paper_id)
+        if paper:
+            papers.append(_exam_paper_summary(paper))
+    papers.sort(key=lambda item: (item.get("year", 0), item.get("id", "")), reverse=True)
+    years = sorted({item["year"] for item in papers if item.get("year")}, reverse=True)
+    return jsonify({
+        "papers": papers,
+        "years": years,
+        "types": list(_EXAM_FILTER_TYPES),
+    })
+
+
+@app.route("/api/exam/papers/<paper_id>", methods=["GET"])
+def exam_get_paper(paper_id):
+    """单卷详情:三层合并后的整卷与逐题答案字段。"""
+    if not _is_valid_exam_id(paper_id):
+        return jsonify({"error": "试卷ID不合法"}), 400
+    paper = _load_exam_paper(paper_id)
+    if not paper:
+        return jsonify({"error": "试卷不存在"}), 404
+    summary = _exam_paper_summary(paper)
+    summary["materials"] = paper.get("materials", "")
+    summary["source_url"] = paper.get("source_url", "")
+    return jsonify({
+        "paper": summary,
+        "questions": [_exam_question_view(question) for question in paper.get("questions") or []],
+    })
+
+
+@app.route("/api/exam/papers/<paper_id>/questions/<qid>/answer", methods=["POST"])
+def exam_generate_answer(paper_id, qid):
+    """生成/读取单题 AI 参照答案;已有答案且非 force 时直接返回缓存。"""
+    if not _is_valid_exam_id(paper_id):
+        return jsonify({"error": "试卷ID不合法"}), 400
+    if not _is_valid_exam_id(qid):
+        return jsonify({"error": "题目ID不合法"}), 400
+    paper = _load_exam_paper(paper_id)
+    if not paper:
+        return jsonify({"error": "试卷不存在"}), 404
+    question = _find_exam_question(paper, qid)
+    if question is None:
+        return jsonify({"error": "题目不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    force = bool(data.get("force"))
+    if _exam_text(question.get("reference_answer")) and not force:
+        return jsonify({"question": _exam_question_view(question), "cached": True})
+
+    generated = _generate_exam_answer(paper, question)
+    if not generated:
+        return jsonify({"error": "AI 未返回可用的参考答案，请重试"}), 502
+    if not _save_exam_answer(paper_id, question["id"], generated):
+        return jsonify({"error": "参考答案保存失败，请稍后重试"}), 500
+    merged = dict(question)
+    merged.update(generated)
+    merged = _normalize_exam_question(merged, question.get("no") or 1)
+    return jsonify({"question": _exam_question_view(merged), "cached": False})
+
+
+@app.route("/api/exam/papers/<paper_id>/generate-all", methods=["POST"])
+def exam_generate_all(paper_id):
+    """后台批量生成整卷参考答案:立即返回任务,用 generate-status 轮询进度。
+
+    一次请求会串行发起多次 AI 调用(每卷 5 题左右),限流只记 1 次;
+    官方/导入答案不会被覆盖,force 只重生成 AI 答案和空答案。"""
+    if not _is_valid_exam_id(paper_id):
+        return jsonify({"error": "试卷ID不合法"}), 400
+    paper = _load_exam_paper(paper_id)
+    if not paper:
+        return jsonify({"error": "试卷不存在"}), 404
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    force = bool(data.get("force"))
+    targets = _exam_job_targets(paper, force)
+    if not targets:
+        return jsonify({
+            "started": False,
+            "job": _exam_job_payload(paper_id),
+            "message": "该卷答案已齐全（官方/导入答案不覆盖）",
+        })
+    if _exam_job_is_running(paper_id) or not _claim_exam_job(paper_id):
+        return jsonify({
+            "started": False,
+            "job": _exam_job_payload(paper_id),
+            "message": "已有生成任务在进行，请稍后刷新",
+        })
+    _update_exam_job(
+        paper_id,
+        status="running",
+        total=len(targets),
+        done=0,
+        failed=0,
+        current="",
+        message="",
+        started_at=_now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    threading.Thread(target=_run_exam_generate_job, args=(paper_id, force), daemon=True).start()
+    return jsonify({"started": True, "job": _exam_job_payload(paper_id)}), 202
+
+
+@app.route("/api/exam/papers/<paper_id>/generate-status", methods=["GET"])
+def exam_generate_status(paper_id):
+    """查询整卷生成任务进度;没有任务时返回 status=idle。"""
+    if not _is_valid_exam_id(paper_id):
+        return jsonify({"error": "试卷ID不合法"}), 400
+    return jsonify({"job": _exam_job_payload(paper_id)})
+
+
+@app.route("/api/exam/imitate", methods=["POST"])
+def exam_imitate():
+    """按参考答案生成仿写示范/结构拆解/可套用句式,返回 markdown 与 html。"""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        data = {}
+    paper_id = _exam_text(data.get("paper_id"))
+    qid = _exam_text(data.get("qid"))
+    mode = _exam_text(data.get("mode")) or "imitate"
+    if not _is_valid_exam_id(paper_id) or not _is_valid_exam_id(qid):
+        return jsonify({"error": "试卷或题目参数不合法"}), 400
+    if mode not in _EXAM_IMITATE_MODES:
+        return jsonify({"error": "mode 参数不合法，仅支持 imitate/outline/phrases"}), 400
+    paper = _load_exam_paper(paper_id)
+    if not paper:
+        return jsonify({"error": "试卷不存在"}), 404
+    question = _find_exam_question(paper, qid)
+    if question is None:
+        return jsonify({"error": "题目不存在"}), 404
+    if not _exam_text(question.get("reference_answer")):
+        return jsonify({"error": "请先生成或导入参考答案"}), 400
+
+    prompt = _exam_imitate_prompt(paper, question, mode)
+    system = (
+        "你是国考申论（行政执法类）辅导老师，只能依据给定参考答案与评分标准展开，"
+        "不得虚构材料内容。"
+    )
+    answer = _exam_text(call_deepseek(prompt, system, timeout=180, max_tokens=3072, model=REVIEW_MODEL))
+    if not answer or answer.startswith("AI调用失败:"):
+        return jsonify({"error": "AI 服务暂时不可用，请稍后重试"}), 502
+    return jsonify({
+        "mode": mode,
+        "answer": answer,
+        "html": markdown.markdown(answer, extensions=["tables", "fenced_code"]),
+    })
+
+
+@app.route("/api/exam/import", methods=["POST"])
+def exam_import_paper():
+    """导入整卷:AI 拆题后写入 imported/<paper_id>.json(导入即覆盖同名种子)。"""
+    data = request.get_json(silent=True) if request.is_json else {}
+    data = data if isinstance(data, dict) else {}
+    text = _exam_text(data.get("text"))
+    year_hint = _exam_parse_year(data.get("year") or request.form.get("year"))
+    paper_hint = _exam_text(data.get("paper") or request.form.get("paper"))
+    filename = ""
+
+    uploaded = request.files.get("file")
+    if uploaded and uploaded.filename:
+        original_name = uploaded.filename
+        if not original_name.lower().endswith((".pdf", ".docx", ".txt", ".md")):
+            return jsonify({"error": "仅支持 PDF、Word(.docx)、TXT 或 Markdown 文件"}), 400
+        if request.content_length and request.content_length > 25 * 1024 * 1024:
+            return jsonify({"error": "上传文件不能超过25MB"}), 413
+        safe_name = secure_filename(original_name) or "exam_paper.txt"
+        temp_path = os.path.join(
+            ESSAY_TEMP_DIR,
+            f"exam_import_{_now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}",
+        )
+        try:
+            uploaded.save(temp_path)
+            text = extract_document_text(temp_path, original_name).strip()
+            filename = original_name
+        except Exception as exc:
+            return jsonify({"error": f"试卷文件解析失败: {exc}"}), 400
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+    if not text:
+        return jsonify({"error": "请上传试卷文件或粘贴整卷文字"}), 400
+    if len(text) > 60000:
+        text = text[:60000]
+
+    prompt = _exam_import_prompt(text, year_hint, paper_hint, filename)
+    system = (
+        "你是严谨的申论命题解析专家，只负责从试卷文字中拆题，"
+        "不得虚构题目和材料。只输出合法 JSON。"
+    )
+    raw = call_deepseek(prompt, system, timeout=240, max_tokens=8192, model=PREPARE_MODEL)
+    parsed = _parse_exam_import_result(raw)
+    if not parsed:
+        return jsonify({"error": "AI 未能识别试卷题目，请检查文字是否完整后重试"}), 502
+
+    year = year_hint or _exam_parse_year(parsed.get("year")) or _now().year
+    paper_label = paper_hint or parsed.get("paper") or "行政执法"
+    paper_id = _exam_build_paper_id(year, paper_label)
+    if not paper_id:
+        return jsonify({"error": "无法生成合法的试卷ID，请检查年份与卷别参数"}), 400
+    title = parsed.get("title") or f"{year}年国家公务员考试申论（{paper_label}）"
+    paper = _normalize_exam_paper({
+        "id": paper_id,
+        "year": year,
+        "paper": paper_label,
+        "title": title,
+        "exam_date": parsed.get("exam_date", ""),
+        "materials": text,
+        "source": parsed.get("source") or "用户导入",
+        "source_url": "",
+        "verified": False,
+        "questions": parsed["questions"],
+    }, paper_id)
+    if not _write_exam_json(_exam_bank_file("imported", paper_id), paper):
+        return jsonify({"error": "试卷保存失败，请稍后重试"}), 500
+    questions = [
+        {
+            "id": question["id"],
+            "type": question["type"],
+            "task": question["task"],
+            "max_score": question["max_score"],
+        }
+        for question in paper.get("questions") or []
+    ]
+    return jsonify({
+        "paper_id": paper_id,
+        "title": paper["title"],
+        "question_count": len(questions),
+        "questions": questions,
+    })
+
 
 # ========== 定时爬取接口 ==========
 CRON_SECRET = os.environ.get("CRON_SECRET", "").strip()

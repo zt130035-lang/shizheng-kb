@@ -1,0 +1,83 @@
+{
+  "id": "2026-xingzheng",
+  "year": 2026,
+  "paper": "行政执法",
+  "title": "2026年国家公务员考试申论（行政执法类）",
+  "exam_date": "",
+  "materials": "",
+  "source": "题干待核对（材料待导入）：作答要求一至五取自成公教育《2026国考申论试题及答案|执法类》，并与格木教育《2026国考申论执法类解析》逐题交叉比对，题干表述与分值（15/10/20/20/35）一致；但给定资料1-5正文未获取到公开全文，故 materials 留空、verified=false，待导入。exam_date 未获取到可印证的正文，留空。",
+  "source_url": "https://www.cgzj.com/gk/4029.html",
+  "verified": false,
+  "questions": [
+    {
+      "id": "1",
+      "no": 1,
+      "type": "归纳概括",
+      "task": "请结合“给定资料1”中鲁师傅广合烧饼发展过程中的四个台阶，谈谈广合县市场监管部门的执法方式发生了哪些变化。（15分）\n要求：全面、准确、有条理。不超过300字。",
+      "max_score": 15,
+      "material_ref": "给定资料1",
+      "reference_answer": "",
+      "answer_kind": "",
+      "answer_source": "",
+      "score_points": [],
+      "structure": [],
+      "imitate_tips": ""
+    },
+    {
+      "id": "2",
+      "no": 2,
+      "type": "综合分析",
+      "task": "“给定资料2”中毛所长说：“现在，我们已经可以从核心保护区撤离到林区边缘，把这片林海完完整整地还给大山了。”请根据“给定资料2”，谈谈毛所长这句话的意思，以及他为什么这么说。（10分）\n要求：理解准确，内容全面，条理清晰。不超过250字。",
+      "max_score": 10,
+      "material_ref": "给定资料2",
+      "reference_answer": "",
+      "answer_kind": "",
+      "answer_source": "",
+      "score_points": [],
+      "structure": [],
+      "imitate_tips": ""
+    },
+    {
+      "id": "3",
+      "no": 3,
+      "type": "应用文",
+      "task": "D市市场监管局拟召开月度工作总结会。假如你是郭队长，请根据“给定资料3”，拟写一份关于三个案例的执法情况汇报提纲。（20分）\n要求：（1）包括三个案例的基本情况、执法过程及处理结果；（2）要点全面，层次分明；（3）不超过400字。",
+      "max_score": 20,
+      "material_ref": "给定资料3",
+      "reference_answer": "",
+      "answer_kind": "",
+      "answer_source": "",
+      "score_points": [],
+      "structure": [],
+      "imitate_tips": ""
+    },
+    {
+      "id": "4",
+      "no": 4,
+      "type": "应用文",
+      "task": "A省拟开展全省政务服务先进集体评选活动，B市准备推荐市政务云数据中心运维团队参选。请根据“给定资料4”，拟写一份推荐材料。（20分）\n要求：（1）紧扣资料，内容全面；（2）结构完整，语言流畅；（3）不超过450字。",
+      "max_score": 20,
+      "material_ref": "给定资料4",
+      "reference_answer": "",
+      "answer_kind": "",
+      "answer_source": "",
+      "score_points": [],
+      "structure": [],
+      "imitate_tips": ""
+    },
+    {
+      "id": "5",
+      "no": 5,
+      "type": "大作文",
+      "task": "“给定资料5”中提到：“要获得真正的进步，不能只是一味往前跑，更关键的是要明确跑的目标。”请你对这句话进行深入思考，针对行政执法工作，联系实际，自选角度，自拟题目，写一篇文章。（35分）\n要求：（1）观点明确、见解深刻；（2）参考给定资料，但不拘泥于给定资料；（3）思路清晰，语言流畅；（4）字数1000~1200字。",
+      "max_score": 35,
+      "material_ref": "给定资料5",
+      "reference_answer": "",
+      "answer_kind": "",
+      "answer_source": "",
+      "score_points": [],
+      "structure": [],
+      "imitate_tips": ""
+    }
+  ]
+}

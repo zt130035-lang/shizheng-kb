@@ -1,0 +1,68 @@
+<view class="container">
+  <view class="hero">
+    <view class="hero-title">国考真题 · 行政执法卷</view>
+    <view class="hero-subtitle">2022–2026 五套卷，逐题参考作答与仿写拆解。</view>
+  </view>
+
+  <view class="section card filter-card" wx:if="{{!loading && !error}}">
+    <view class="filter-label">年份</view>
+    <view class="chip-row">
+      <view
+        class="chip {{yearFilter == item.value ? 'active' : ''}}"
+        wx:for="{{yearChips}}"
+        wx:key="label"
+        data-value="{{item.value}}"
+        bindtap="selectYear"
+      >{{item.label}}</view>
+    </view>
+    <block wx:if="{{typeChips.length > 1}}">
+      <view class="filter-label">题型</view>
+      <view class="chip-row">
+        <view
+          class="chip {{typeFilter == item.value ? 'active' : ''}}"
+          wx:for="{{typeChips}}"
+          wx:key="label"
+          data-value="{{item.value}}"
+          bindtap="selectType"
+        >{{item.label}}</view>
+      </view>
+    </block>
+  </view>
+
+  <view wx:if="{{loading}}" class="status-card">正在加载真题…</view>
+
+  <view wx:if="{{!loading && error}}">
+    <view class="status-card error">{{error}}</view>
+    <view class="debug-hint">当前接口：{{baseUrl}}</view>
+    <view class="debug-hint">如果刚更新过代码：本地调试请重启后端（python server.py）；手机上请重新部署线上服务。</view>
+    <button class="btn retry-btn" bindtap="loadPapers">重试</button>
+  </view>
+
+  <view class="section list" wx:if="{{!loading && !error}}">
+    <view class="card paper-card" wx:for="{{list}}" wx:key="id" data-id="{{item.id}}" bindtap="openPaper">
+      <view class="paper-head">
+        <view class="paper-year">{{item.year}}</view>
+        <view class="paper-body">
+          <view class="card-title">{{item.title}}</view>
+          <view class="card-meta">{{item.statusText}}<text wx:if="{{item.totalScore}}"> · 共 {{item.totalScore}} 分</text></view>
+        </view>
+        <view class="paper-arrow">›</view>
+      </view>
+      <view class="paper-tags" wx:if="{{item.types.length}}">
+        <text class="tag" wx:for="{{item.types}}" wx:for-item="type" wx:key="*this">{{type}}</text>
+      </view>
+      <view class="paper-pending" wx:if="{{item.pending}}">这套卷还没有题目，可在后台用「导入真题」把整卷文字拆题入库。</view>
+      <view class="paper-pending" wx:if="{{!item.pending && !item.verified}}">题干已收录但材料待补齐，生成的参考答案仅供参考。</view>
+    </view>
+    <view wx:if="{{!list.length}}" class="empty">没有符合条件的试卷</view>
+  </view>
+
+  <view class="section card guide-card">
+    <view class="section-title">说明</view>
+    <view class="divider"></view>
+    <view class="tip-line">1. 国考申论官方不公布标准答案，页面里每份答案都标注来源。</view>
+    <view class="tip-line">2. 「AI 参照答案」按申论评分规则生成，仅供仿写参考，不是官方答案。</view>
+    <view class="tip-line">3. 点开整卷可逐题复制作答、查看评分要点、生成仿写示范。</view>
+    <view class="tip-line">4. 下拉可刷新，答案生成后会更新为「已备答案」。</view>
+  </view>
+</view>

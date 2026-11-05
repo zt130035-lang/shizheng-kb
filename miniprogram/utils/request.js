@@ -25,7 +25,11 @@ function friendlyError(statusCode, body) {
   const code = Number(statusCode)
   if (code === 401) return '服务认证失败，请检查后端配置'
   if (code === 403) return '无权访问该功能'
-  if (code === 404) return '内容不存在'
+  if (code === 404) {
+    // 后端返回了业务错误就用它；否则多半是接口不存在(后端版本较旧)
+    const detail = (body && (body.error || body.message)) || ''
+    return detail || '接口不存在：后端可能还是旧版本，请重启本地后端或重新部署线上服务'
+  }
   if (code === 413) return '文件过大，请压缩后重试'
   if (code === 429) {
     const after = body && body.retry_after
@@ -84,6 +88,52 @@ function uploadTo(url, path, formData = {}, name = 'file', timeout = 180000, onP
   })
 }
 
+function buildUrl(url, params = {}) {
+  const base = /^(https?:)?\/\//.test(url) ? url : getBaseUrl() + url
+  const query = Object.keys(params || {})
+    .filter(key => {
+      const value = params[key]
+      return value !== undefined && value !== null && value !== ''
+    })
+    .map(key => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join('&')
+  if (!query) return base
+  return `${base}${base.indexOf('?') >= 0 ? '&' : '?'}${query}`
+}
+
+function getJson(url, params = {}, timeout = 20000) {
+  const fullUrl = buildUrl(url, params)
+  return new Promise((resolve) => {
+    const attempt = (retry) => {
+      const retryOrResolve = (outcome) => {
+        if (shouldRetry(outcome.statusCode, outcome.timeout) && retry < MAX_RETRY) {
+          setTimeout(() => attempt(retry + 1), RETRY_BASE_DELAY * Math.pow(2, retry))
+          return
+        }
+        resolve(outcome)
+      }
+      wx.request({
+        url: fullUrl,
+        method: 'GET',
+        timeout,
+        header: { 'X-User-Id': ensureUserId() },
+        success(res) {
+          const body = res.data || {}
+          if (res.statusCode >= 200 && res.statusCode < 300) return retryOrResolve(body)
+          const merged = (typeof body === 'object' && body) ? body : {}
+          retryOrResolve({ statusCode: res.statusCode, ...merged, error: friendlyError(res.statusCode, body) })
+        },
+        fail(err) {
+          const errMsg = err && err.errMsg ? err.errMsg : 'request fail'
+          const timeoutFlag = String(errMsg).toLowerCase().includes('timeout')
+          retryOrResolve({ timeout: timeoutFlag, error: timeoutFlag ? '请求超时' : '网络请求失败' })
+        }
+      })
+    }
+    attempt(0)
+  })
+}
+
 function postJson(url, data = {}, timeout = 180000) {
   const fullUrl = /^https?:\/\//.test(url) ? url : getBaseUrl() + url
   return new Promise((resolve) => {
@@ -118,4 +168,4 @@ function postJson(url, data = {}, timeout = 180000) {
   })
 }
 
-module.exports = { uploadTo, postJson, getBaseUrl, DEFAULT_BASE_URL, ensureUserId }
+module.exports = { uploadTo, getJson, postJson, getBaseUrl, DEFAULT_BASE_URL, ensureUserId }

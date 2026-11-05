@@ -1,0 +1,123 @@
+<view class="container">
+  <view wx:if="{{loading}}" class="status-card">正在加载试卷…</view>
+
+  <view wx:if="{{!loading && error}}">
+    <view class="status-card error">{{error}}</view>
+    <button class="btn retry-btn" bindtap="loadPaper">重试</button>
+  </view>
+
+  <block wx:if="{{!loading && !error && paper}}">
+    <view class="hero">
+      <view class="hero-title">{{paper.year}} 国考 · {{paper.paper}}卷</view>
+      <view class="hero-subtitle">{{paper.title}}</view>
+      <view class="hero-note">{{paper.sourceText}}</view>
+    </view>
+
+    <view class="section card" wx:if="{{questions.length}}">
+      <view class="section-title">整卷答案</view>
+      <view class="divider"></view>
+      <view class="card-meta">{{answeredCount}}/{{questions.length}} 题已有参考答案</view>
+      <button class="btn batch-btn" bindtap="generateWholePaper" disabled="{{jobRunning}}">{{jobRunning ? jobText : (answeredCount >= questions.length ? '全部重新生成（AI）' : '一键生成整卷答案')}}</button>
+      <view class="batch-tip" wx:if="{{jobRunning}}">后台按顺序生成，可以离开本页；完成后自动同步到 GitHub。</view>
+      <view class="batch-tip" wx:else>每题约 20–60 秒；官方/导入的答案不会被覆盖。</view>
+    </view>
+
+    <view class="section card" wx:if="{{questions.length}}">
+      <view class="section-title">选择题目</view>
+      <view class="divider"></view>
+      <view class="q-picker">
+        <view
+          class="q-chip {{currentIndex == index ? 'active' : ''}}"
+          wx:for="{{questions}}"
+          wx:key="id"
+          data-index="{{index}}"
+          bindtap="selectQuestion"
+        >第{{item.no}}题<text wx:if="{{item.scoreText}}"> · {{item.scoreText}}</text></view>
+      </view>
+    </view>
+
+    <view class="section card" wx:if="{{!questions.length}}">
+      <view class="section-title">暂无题目</view>
+      <view class="divider"></view>
+      <view class="empty small-empty">这套卷还没有题目，可以用「我的 → 真题导入」上传整卷文字或 PDF 拆题入库。</view>
+    </view>
+
+    <view class="section card" wx:if="{{current}}">
+      <view class="q-head">
+        <text class="tag">{{current.type}}</text>
+        <text class="q-score" wx:if="{{current.scoreText}}">{{current.scoreText}}</text>
+      </view>
+      <view class="q-task">{{current.task || '题干待补充'}}</view>
+      <view class="q-ref" wx:if="{{current.material_ref}}">作答依据：{{current.material_ref}}</view>
+
+      <block wx:if="{{paper.materials}}">
+        <view class="material-toggle" bindtap="toggleMaterial">{{materialOpen ? '收起全套材料 ▲' : '展开全套材料 ▼'}}</view>
+        <view class="material-body" wx:if="{{materialOpen}}">{{paper.materials}}</view>
+      </block>
+    </view>
+
+    <view class="section card" wx:if="{{current}}">
+      <view class="section-title">参考作答</view>
+      <view class="answer-source {{current.answer_kind === 'ai' ? 'ai' : ''}}">{{current.answerLabel}}</view>
+      <view class="divider"></view>
+      <view wx:if="{{current.reference_answer}}" class="answer-body">{{current.reference_answer}}</view>
+      <view wx:else class="empty small-empty">这道题还没有参考答案。</view>
+      <view class="material-missing" wx:if="{{!paper.materials}}">本卷给定资料暂未收录，AI 只能依据题干作答，参考价值有限；可用「我的 → 真题导入」补齐材料后重新生成。</view>
+      <view class="action-row">
+        <button class="btn secondary btn-inline" wx:if="{{current.reference_answer}}" bindtap="copyAnswer">复制作答</button>
+        <button class="btn btn-inline" wx:if="{{!current.reference_answer}}" bindtap="generateAnswer" disabled="{{generating}}">{{generating ? '生成中…' : '生成 AI 参照答案'}}</button>
+        <button class="btn secondary btn-inline" wx:if="{{current.reference_answer && current.answer_kind !== 'imported' && current.answer_kind !== 'official'}}" bindtap="generateAnswer" disabled="{{generating}}">{{generating ? '生成中…' : '重新生成'}}</button>
+      </view>
+      <view class="ai-disclaimer" wx:if="{{current.answer_kind === 'ai'}}">AI 参照答案按申论评分规则生成，不是官方标准答案，仅供仿写参考。</view>
+    </view>
+
+    <view class="section card" wx:if="{{current && current.score_points.length}}">
+      <view class="section-title">评分要点</view>
+      <view class="divider"></view>
+      <view class="point-line" wx:for="{{current.score_points}}" wx:key="*this">{{index + 1}}. {{item}}</view>
+    </view>
+
+    <view class="section card" wx:if="{{current && current.structure.length}}">
+      <view class="section-title">仿写结构</view>
+      <view class="divider"></view>
+      <view class="point-line" wx:for="{{current.structure}}" wx:key="*this">{{index + 1}}. {{item}}</view>
+    </view>
+
+    <view class="section card" wx:if="{{current && current.imitate_tips}}">
+      <view class="section-title">仿写提示</view>
+      <view class="divider"></view>
+      <view class="block-text">{{current.imitate_tips}}</view>
+    </view>
+
+    <view class="section card" wx:if="{{current}}">
+      <view class="section-title">仿写练习</view>
+      <view class="divider"></view>
+      <view class="action-row">
+        <button class="btn secondary btn-inline" data-mode="imitate" bindtap="runImitate" disabled="{{aiBusy}}">AI 仿写示范</button>
+        <button class="btn secondary btn-inline" data-mode="outline" bindtap="runImitate" disabled="{{aiBusy}}">结构拆解</button>
+        <button class="btn secondary btn-inline" data-mode="phrases" bindtap="runImitate" disabled="{{aiBusy}}">可套用句式</button>
+      </view>
+
+      <view wx:if="{{aiBusy}}" class="status-card">正在生成{{aiModeLabel}}，通常需要 20–60 秒…</view>
+      <view wx:if="{{aiError}}" class="status-card error">{{aiError}}</view>
+
+      <view wx:if="{{aiHtml}}" class="ai-result">
+        <view class="ai-result-head">
+          <view class="ai-result-title">{{aiModeLabel}}</view>
+          <button class="mini-btn" bindtap="copyAiResult">复制</button>
+        </view>
+        <rich-text class="rich" nodes="{{aiHtml}}"></rich-text>
+        <view class="ai-disclaimer">内容由 AI 生成，仅供仿写参考。</view>
+      </view>
+    </view>
+
+    <view class="section card guide-card">
+      <view class="section-title">怎么用</view>
+      <view class="divider"></view>
+      <view class="tip-line">1. 先读「参考作答」，对照「评分要点」划出得分句。</view>
+      <view class="tip-line">2. 点「结构拆解」看它怎么组织答案。</view>
+      <view class="tip-line">3. 点「AI 仿写示范」照着写一版自己的。</view>
+      <view class="tip-line">4. 写完可以用「批改」tab 上传批改。</view>
+    </view>
+  </block>
+</view>
